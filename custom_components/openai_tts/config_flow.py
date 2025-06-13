@@ -9,7 +9,7 @@ import logging
 from urllib.parse import urlparse
 import uuid
 
-from homeassistant import data_entry_flow
+from homeassistant import data_entry_flow, config_entries
 from homeassistant.config_entries import ConfigFlow, OptionsFlow
 from homeassistant.helpers.selector import selector
 from homeassistant.helpers.selector import (
@@ -99,7 +99,8 @@ def get_chime_options() -> list[dict[str, str]]:
     options.sort(key=lambda x: x["label"])
     return options
 
-class OpenAITTSConfigFlow(ConfigFlow, domain=DOMAIN):
+@config_entries.HANDLERS.register(DOMAIN)
+class OpenAITTSConfigFlow(ConfigFlow):
     """Handle a config flow for OpenAI TTS."""
     VERSION = 1
     # Connection class and data not needed for this version of config flow
