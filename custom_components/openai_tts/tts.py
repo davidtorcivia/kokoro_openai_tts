@@ -30,9 +30,12 @@ from .const import (
     CONF_NORMALIZE_AUDIO,
     # New constants
     CONF_TTS_ENGINE,
-    OPENAI_ENGINE, # DEFAULT_TTS_ENGINE is OPENAI_ENGINE
+    OPENAI_ENGINE,
     KOKORO_FASTAPI_ENGINE,
     CONF_KOKORO_URL,
+    CONF_KOKORO_CHUNK_SIZE, # Added
+    DEFAULT_KOKORO_CHUNK_SIZE, # Added
+    # CONF_KOKORO_VOICE_ALLOW_BLENDING is not directly used in tts.py, it's for config_flow
 )
 from .openaitts_engine import OpenAITTSEngine
 from homeassistant.exceptions import MaxLengthExceeded
@@ -61,12 +64,22 @@ async def async_setup_entry(
         )
         return
 
+    # Get Kokoro-specific chunk_size from options if Kokoro engine is used
+    # Options are preferred over data for user-configurable settings post-setup.
+    kokoro_chunk_size = None
+    if engine_type == KOKORO_FASTAPI_ENGINE:
+        kokoro_chunk_size = config_entry.options.get(
+            CONF_KOKORO_CHUNK_SIZE,
+            config_entry.data.get(CONF_KOKORO_CHUNK_SIZE, DEFAULT_KOKORO_CHUNK_SIZE) # Fallback to data, then default
+        )
+
     engine = OpenAITTSEngine(
-        api_key=api_key, # Pass it, engine's __init__ should handle if it's None and not needed
-        voice=config_entry.data[CONF_VOICE],
-        model=config_entry.data[CONF_MODEL],
-        speed=config_entry.data.get(CONF_SPEED, 1.0),
-        url=api_url, # This is the resolved URL for the selected engine
+        api_key=api_key,
+        voice=config_entry.data[CONF_VOICE], # Initial voice from setup
+        model=config_entry.data[CONF_MODEL], # Initial model from setup
+        speed=config_entry.data.get(CONF_SPEED, 1.0), # Initial speed from setup
+        url=api_url,
+        chunk_size=kokoro_chunk_size # Pass chunk_size to engine
     )
     async_add_entities([OpenAITTSEntity(hass, config_entry, engine)])
 
@@ -138,19 +151,33 @@ class OpenAITTSEntity(TextToSpeechEntity):
         try:
             if len(message) > 4096:
                 raise MaxLengthExceeded("Message exceeds maximum allowed length")
-            # Retrieve settings.
-            current_speed = self._config.options.get(CONF_SPEED, self._config.data.get(CONF_SPEED, 1.0))
+            # Retrieve settings. Voice, speed, and instructions can be overridden by options or service call 'options'.
+            # Voice is taken from options first, then from initial config data.
+            # This allows options flow to change the voice.
             effective_voice = self._config.options.get(CONF_VOICE, self._config.data.get(CONF_VOICE))
-            instructions = options.get(CONF_INSTRUCTIONS, self._config.options.get(CONF_INSTRUCTIONS, self._config.data.get(CONF_INSTRUCTIONS)))
+            # Speed can also be configured in options.
+            current_speed = self._config.options.get(CONF_SPEED, self._config.data.get(CONF_SPEED, 1.0))
+            # Instructions can be configured in options or passed in service call.
+            # Service call 'options' override component options.
+            effective_instructions = options.get(CONF_INSTRUCTIONS, self._config.options.get(CONF_INSTRUCTIONS, self._config.data.get(CONF_INSTRUCTIONS)))
+
             _LOGGER.debug("Effective speed: %s", current_speed)
             _LOGGER.debug("Effective voice: %s", effective_voice)
-            _LOGGER.debug("Instructions: %s", instructions)
+            _LOGGER.debug("Effective instructions: %s", effective_instructions)
+
+            # Note: chunk_size is configured in the engine during init, not passed per call to get_tts.
 
             _LOGGER.debug("Creating TTS API request")
             api_start = time.monotonic()
 
             audio_chunks = []
-            async for chunk in self._engine.get_tts(message, speed=current_speed, voice=effective_voice, instructions=instructions):
+            # Pass effective voice, speed, and instructions to the engine's get_tts method.
+            async for chunk in self._engine.get_tts(
+                text=message,
+                speed=current_speed,
+                voice=effective_voice,
+                instructions=effective_instructions
+            ):
                 audio_chunks.append(chunk)
             audio_content = b"".join(audio_chunks)
 

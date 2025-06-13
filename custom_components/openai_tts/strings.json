@@ -16,7 +16,8 @@
         "data_description": {
           "api_key": "Required for official OpenAI engine. Leave blank if using Kokoro FastAPI or if not required by your OpenAI-compatible endpoint.",
           "url": "The API endpoint for OpenAI or your OpenAI-compatible proxy. Leave blank if using Kokoro FastAPI. Defaults to official OpenAI endpoint if not specified for OpenAI engine.",
-          "kokoro_url": "The full URL for your Kokoro FastAPI TTS endpoint (e.g., http://localhost:8002/tts). Required if Kokoro FastAPI engine is selected."
+          "kokoro_url": "The full URL for your Kokoro FastAPI TTS endpoint (e.g., http://localhost:8002/tts). Required if Kokoro FastAPI engine is selected.",
+          "voice": "Enter the voice name. For Kokoro engine, if 'Allow Voice Blending' is enabled in options, you can use a blended voice string (e.g., 'en_us_child,0.5,en_us_military,0.5'). Otherwise, select/enter a single voice. Refer to documentation for available voices."
         }
       }
     },
@@ -28,7 +29,8 @@
       "voice_required": "Voice selection is required.",
       "url_required_openai": "API URL is required for the OpenAI engine.",
       "kokoro_url_required": "Kokoro FastAPI URL is required for the Kokoro FastAPI engine.",
-      "invalid_url": "Invalid URL format."
+      "invalid_url": "Invalid URL format.",
+      "invalid_chunk_size": "Chunk size must be a positive integer."
     },
     "abort": {
       "already_configured": "This TTS engine configuration is already registered."
@@ -46,7 +48,14 @@
           "instructions": "Instructions (if supported by model)",
           "chime": "Enable chime sound prior to speech (useful for announcements)",
           "chime_sound": "Chime sound",
-          "normalize_audio": "Enable loudness normalization for generated audio (uses more CPU)"
+          "normalize_audio": "Enable loudness normalization for generated audio (uses more CPU)",
+          "kokoro_chunk_size": "Kokoro: Audio Chunk Size (e.g., 400)",
+          "kokoro_voice_allow_blending": "Kokoro: Allow Voice Blending"
+        },
+        "data_description": {
+            "voice": "Enter the voice name. For Kokoro engine, if 'Allow Voice Blending' is enabled, you can use a blended voice string (e.g., 'en_us_child,0.5,en_us_military,0.5'). Otherwise, select a single voice from the list.",
+            "kokoro_chunk_size": "Experimental: Specify chunk size for Kokoro FastAPI streaming. Only applies if Kokoro engine is used.",
+            "kokoro_voice_allow_blending": "If enabled, the 'Voice' field above will accept a text string for blended voices. If disabled, 'Voice' will be a dropdown of available Kokoro voices. Only applies if Kokoro engine is used."
         }
       }
     }

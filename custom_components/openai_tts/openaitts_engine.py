@@ -8,37 +8,53 @@ from asyncio import CancelledError
 
 from homeassistant.exceptions import HomeAssistantError
 
+from .const import KOKORO_MODEL # To identify Kokoro engine for chunk_size
+
 _LOGGER = logging.getLogger(__name__)
 
 class OpenAITTSEngine:
-    def __init__(self, api_key: str, voice: str, model: str, speed: float, url: str):
+    def __init__(self, api_key: str, voice: str, model: str, speed: float, url: str, chunk_size: int | None = None):
         self._api_key = api_key
         self._voice = voice
         self._model = model
         self._speed = speed
         self._url = url
         self._session = aiohttp.ClientSession()
+        self._chunk_size = chunk_size # Store chunk_size
 
     async def get_tts(self, text: str, speed: float = None, instructions: str = None, voice: str = None):
         """Asynchronous TTS request that streams audio chunks."""
-        if speed is None:
-            speed = self._speed
-        if voice is None:
-            voice = self._voice
+        current_speed = speed if speed is not None else self._speed
+        current_voice = voice if voice is not None else self._voice
+        # Note: self._model is the configured model, used for engine-specific logic like chunk_size.
+        # The 'model' in the 'data' payload is what's sent to the API.
+        # For Kokoro, self._model will be KOKORO_MODEL, but data["model"] will also be KOKORO_MODEL.
+        # For OpenAI, self._model is e.g. "tts-1", and data["model"] is also "tts-1".
 
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
         data = {
-            "model": self._model,
+            "model": self._model, # This should be the actual model name to send to the API
             "input": text,
-            "voice": voice,
-            "response_format": "mp3",  # Assuming mp3 is still desired
-            "speed": speed
+            "voice": current_voice,
+            "response_format": "mp3",
+            "speed": current_speed
         }
-        if instructions is not None and self._model == "gpt-4o-mini-tts": # TODO: check if this model is correct
+
+        # Add chunk_size to payload if it's set and the engine is Kokoro
+        # We identify Kokoro by checking if the configured model name is KOKORO_MODEL.
+        if self._chunk_size is not None and self._model == KOKORO_MODEL:
+            data["chunk_size"] = self._chunk_size
+            _LOGGER.debug("Using chunk_size %s for Kokoro request", self._chunk_size)
+
+        # Handling for instructions - ensure this model check is appropriate for your setup
+        # This 'gpt-4o-mini-tts' might be a custom name for your OpenAI compatible proxy or specific Kokoro setup
+        if instructions is not None and self._model == "gpt-4o-mini-tts":
             data["instructions"] = instructions
+
+        _LOGGER.debug("Requesting TTS with data: %s", data) # Log the data being sent
 
         try:
             async with self._session.post(
