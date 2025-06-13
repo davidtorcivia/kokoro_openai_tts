@@ -212,7 +212,6 @@ class OpenAITTSConfigFlow(ConfigFlow, domain=DOMAIN):
         elif current_engine == KOKORO_FASTAPI_ENGINE:
             data_schema_engine.update({
                 vol.Required(CONF_KOKORO_URL, default=user_input.get(CONF_KOKORO_URL) if user_input else KOKORO_DEFAULT_URL): TextSelector(TextSelectorConfig(type=TextSelectorType.URL)),
-                vol.Required(CONF_MODEL, default=KOKORO_MODEL): cv.disabled(KOKORO_MODEL),
                 vol.Required(CONF_VOICE, default=user_input.get(CONF_VOICE, KOKORO_VOICES[0]) if user_input else KOKORO_VOICES[0]): cv.string,
             })
 
