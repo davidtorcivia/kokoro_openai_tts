@@ -51,6 +51,15 @@ import homeassistant.helpers.config_validation as cv
 
 _LOGGER = logging.getLogger(__name__)
 
+DATA_SCHEMA_USER = vol.Schema({
+    vol.Required(CONF_TTS_ENGINE, default=DEFAULT_TTS_ENGINE): selector({
+        "select": {
+            "options": TTS_ENGINES,
+            "translation_key": "tts_engine"
+        }
+    })
+})
+
 # Removed class-level data_schema, it will be dynamic
 
 def generate_entry_id() -> str:
@@ -102,69 +111,83 @@ def get_chime_options() -> list[dict[str, str]]:
 class OpenAITTSConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for OpenAI TTS."""
     VERSION = 1
-    # Connection class and data not needed for this version of config flow
-    # CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
-    # data: dict[str, Any] = {} # To store data across steps if needed
+    # CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL # Not used
+
+    def __init__(self) -> None:
+        """Initialize the config flow."""
+        self.init_data: dict[str, Any] = {}
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
+        """Handle the initial step where the user selects the TTS engine."""
         errors: dict[str, str] = {}
+        if user_input is not None:
+            self.init_data = user_input
+            return await self.async_step_engine_specific_config()
+
+        # If user_input is None, this is the first time the step is shown
+        # self.init_data is already {} from __init__ or previous failed attempt of this step
+        return self.async_show_form(
+            step_id="user", data_schema=DATA_SCHEMA_USER, errors=errors
+        )
+
+    async def async_step_engine_specific_config(self, user_input: dict[str, Any] | None = None):
+        """Handle the engine-specific configuration step."""
+        errors: dict[str, str] = {}
+        current_engine = self.init_data.get(CONF_TTS_ENGINE)
+
+        if not current_engine:
+            _LOGGER.error("TTS Engine not found in init_data, returning to user step.")
+            # Should ideally not happen if logic is correct
+            return await self.async_step_user()
 
         if user_input is not None:
-            # Store current input to repopulate form if errors occur
-            # self.data.update(user_input) # If using self.data for multi-step
-
-            # Validate common and engine-specific fields
-            validation_errors = await validate_config_input(user_input)
+            full_data = {**self.init_data, **user_input}
+            validation_errors = await validate_config_input(full_data)
             errors.update(validation_errors)
 
             if not errors:
                 try:
                     entry_id = generate_entry_id()
-                    # await self.async_set_unique_id(entry_id) # Deprecated, unique_id handled by data
-                    user_input[UNIQUE_ID] = entry_id
+                    full_data[UNIQUE_ID] = entry_id
 
-                    title = "OpenAI TTS"
-                    current_model_for_title = user_input.get(CONF_MODEL)
+                    title = "OpenAI TTS" # Default title
+                    current_model_for_title = full_data.get(CONF_MODEL)
 
-                    if user_input.get(CONF_TTS_ENGINE) == KOKORO_FASTAPI_ENGINE:
-                        # For Kokoro, model is fixed by schema (cv.disabled)
-                        # but user_input might not contain it if disabled fields are not submitted.
-                        # So, we use KOKORO_MODEL directly for title consistency.
-                        current_model_for_title = KOKORO_MODEL
-                        kokoro_url_parsed = urlparse(user_input.get(CONF_KOKORO_URL, ""))
+                    if full_data.get(CONF_TTS_ENGINE) == KOKORO_FASTAPI_ENGINE:
+                        current_model_for_title = KOKORO_MODEL # Model is fixed for Kokoro
+                        kokoro_url_parsed = urlparse(full_data.get(CONF_KOKORO_URL, ""))
                         title = f"Kokoro FastAPI TTS ({kokoro_url_parsed.hostname}, {current_model_for_title})"
-                        # Clean up: Remove OpenAI specific fields, ensure API key is not stored
-                        user_input.pop(CONF_API_KEY, None)
-                        user_input.pop(CONF_URL, None)
-                        # Ensure model is set to the fixed Kokoro model in saved data
-                        user_input[CONF_MODEL] = KOKORO_MODEL
-                    else: # OpenAI or compatible
-                        url_parsed = urlparse(user_input.get(CONF_URL, ""))
+                        full_data.pop(CONF_API_KEY, None)
+                        full_data.pop(CONF_URL, None)
+                        full_data[CONF_MODEL] = KOKORO_MODEL
+                    else:  # OpenAI or compatible
+                        url_parsed = urlparse(full_data.get(CONF_URL, ""))
                         title = f"OpenAI TTS ({url_parsed.hostname}, {current_model_for_title})"
-                        # Clean up: Remove Kokoro specific fields
-                        user_input.pop(CONF_KOKORO_URL, None)
+                        full_data.pop(CONF_KOKORO_URL, None)
+                        # Ensure KOKORO specific config that might be in user_input from a previous attempt is removed
+                        full_data.pop(CONF_KOKORO_CHUNK_SIZE, None)
+                        full_data.pop(CONF_KOKORO_VOICE_ALLOW_BLENDING, None)
 
-                    return self.async_create_entry(title=title, data=user_input)
+
+                    return self.async_create_entry(title=title, data=full_data)
                 except data_entry_flow.AbortFlow:
+                    # AbortFlow is raised by async_create_entry if an entry with the same unique_id already exists
+                    # This should ideally be caught by Home Assistant's config flow manager
+                    # or by an earlier unique_id check if we were to implement one.
+                    # For now, let it propagate or return a form with an error.
+                    _LOGGER.warning("Config flow aborted, possibly due to existing entry.")
+                    errors["base"] = "abort_flow_error" # Or a more specific error
                 except Exception as e:
                     _LOGGER.exception("Unexpected error creating entry: %s", e)
-                    errors["base"] = "unknown" # Use "unknown" from strings.json
+                    errors["base"] = "unknown"
 
-        # Determine current engine for schema or default
-        current_engine = user_input.get(CONF_TTS_ENGINE, DEFAULT_TTS_ENGINE) if user_input else DEFAULT_TTS_ENGINE
-
-        # Build schema dynamically
-        data_schema_user = {
-            vol.Required(CONF_TTS_ENGINE, default=current_engine): selector({
-                "select": {
-                    "options": TTS_ENGINES,
-                    "translation_key": "tts_engine" # Uses selector.<domain>.<translation_key>
-                }
-            }),
-        }
+        # Build schema dynamically based on current_engine
+        # This part is executed if user_input is None (first time showing this step)
+        # OR if user_input was provided but resulted in errors.
+        data_schema_engine = {}
 
         if current_engine == OPENAI_ENGINE:
-            data_schema_user.update({
+            data_schema_engine.update({
                 vol.Optional(CONF_API_KEY): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
                 vol.Required(CONF_URL, default=user_input.get(CONF_URL) if user_input else "https://api.openai.com/v1/audio/speech"): TextSelector(TextSelectorConfig(type=TextSelectorType.URL)),
                 vol.Required(CONF_MODEL, default=user_input.get(CONF_MODEL, "tts-1") if user_input else "tts-1"): selector({
@@ -175,22 +198,21 @@ class OpenAITTSConfigFlow(ConfigFlow, domain=DOMAIN):
                 }),
                 vol.Required(CONF_VOICE, default=user_input.get(CONF_VOICE, OPENAI_VOICES[0]) if user_input else OPENAI_VOICES[0]): selector({
                     "select": {
-                        "options": OPENAI_VOICES, # Use specific OpenAI voices
-                        "mode": "dropdown", "sort": True, "custom_value": True, "translation_key": "voice" # Assuming generic voice selector for now
+                        "options": OPENAI_VOICES,
+                        "mode": "dropdown", "sort": True, "custom_value": True, "translation_key": "voice"
                     }
                 }),
             })
         elif current_engine == KOKORO_FASTAPI_ENGINE:
-            data_schema_user.update({
+            data_schema_engine.update({
                 vol.Required(CONF_KOKORO_URL, default=user_input.get(CONF_KOKORO_URL) if user_input else KOKORO_DEFAULT_URL): TextSelector(TextSelectorConfig(type=TextSelectorType.URL)),
                 vol.Required(CONF_MODEL, default=KOKORO_MODEL): cv.disabled(KOKORO_MODEL),
-                # Voice is now a text field for Kokoro in user step, to allow future blending input.
-                # Default to first Kokoro voice. Description in strings.json will guide user.
                 vol.Required(CONF_VOICE, default=user_input.get(CONF_VOICE, KOKORO_VOICES[0]) if user_input else KOKORO_VOICES[0]): cv.string,
             })
 
-        # Common fields - Speed is always applicable.
-        data_schema_user.update({
+        # Common field for both engines - Speed
+        # Default handling: if user_input exists (form re-shown due to error), use its value, else use default.
+        data_schema_engine.update({
             vol.Optional(CONF_SPEED, default=user_input.get(CONF_SPEED, 1.0) if user_input else 1.0): selector({
                 "number": {
                     "min": 0.25,
@@ -202,10 +224,9 @@ class OpenAITTSConfigFlow(ConfigFlow, domain=DOMAIN):
         })
 
         return self.async_show_form(
-            step_id="user",
-            data_schema=vol.Schema(data_schema_user),
-            errors=errors,
-            # description_placeholders can be used if needed, e.g. for API key hints
+            step_id="engine_specific_config",
+            data_schema=vol.Schema(data_schema_engine),
+            errors=errors
         )
 
     @staticmethod
