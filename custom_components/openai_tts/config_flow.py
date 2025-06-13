@@ -251,7 +251,8 @@ class OpenAITTSOptionsFlow(OptionsFlow):
 
     def __init__(self, config_entry: ConfigEntry) -> None: # Added type hint
         """Initialize options flow."""
-        self.config_entry = config_entry
+        # self.config_entry is automatically available from the base OptionsFlow class
+        pass
 
     async def async_step_init(self, user_input: dict | None = None):
         """Handle options flow."""
@@ -300,8 +301,6 @@ class OpenAITTSOptionsFlow(OptionsFlow):
                     CONF_VOICE,
                     default=self.config_entry.options.get(CONF_VOICE, self.config_entry.data.get(CONF_VOICE, KOKORO_VOICES[0]))
                 )] = vol.In(KOKORO_VOICES)
-
-            options_schema_dict[vol.Optional(CONF_MODEL, default=KOKORO_MODEL)] = cv.disabled(KOKORO_MODEL)
 
         else: # OpenAI
             options_schema_dict.update({
