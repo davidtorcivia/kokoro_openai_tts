@@ -168,7 +168,13 @@ class OpenAITTSConfigFlow(ConfigFlow, domain=DOMAIN):
                         full_data.pop(CONF_KOKORO_CHUNK_SIZE, None)
                         full_data.pop(CONF_KOKORO_VOICE_ALLOW_BLENDING, None)
 
-
+                    _LOGGER.debug("Attempting to create entry. Title: '%s'", title)
+                    _LOGGER.debug("Full data for create_entry: %s", full_data)
+                    if full_data.get(CONF_TTS_ENGINE) == KOKORO_FASTAPI_ENGINE:
+                        _LOGGER.debug("Kokoro specific: CONF_KOKORO_URL: %s, CONF_MODEL: %s, CONF_VOICE: %s",
+                                      full_data.get(CONF_KOKORO_URL),
+                                      full_data.get(CONF_MODEL),
+                                      full_data.get(CONF_VOICE))
                     return self.async_create_entry(title=title, data=full_data)
                 except data_entry_flow.AbortFlow:
                     # AbortFlow is raised by async_create_entry if an entry with the same unique_id already exists
@@ -178,8 +184,8 @@ class OpenAITTSConfigFlow(ConfigFlow, domain=DOMAIN):
                     _LOGGER.warning("Config flow aborted, possibly due to existing entry.")
                     errors["base"] = "abort_flow_error" # Or a more specific error
                 except Exception as e:
-                    _LOGGER.exception("Unexpected error creating entry: %s", e)
-                    errors["base"] = "unknown"
+                    _LOGGER.exception("Detailed error creating entry (exc_info=True will show stack trace): %s", e, exc_info=True)
+                    errors["base"] = "unknown" # Keep providing a generic UI error
 
         # Build schema dynamically based on current_engine
         # This part is executed if user_input is None (first time showing this step)
