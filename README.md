@@ -74,25 +74,25 @@ You can configure the following options during setup:
     *   `Kokoro FastAPI`: Uses a local instance of [Kokoro FastAPI](https://github.com/remsky/Kokoro-FastAPI). This is a great option for local processing and avoiding cloud costs.
 
 *   **OpenAI API Key** (`api_key`):
-    *   Required if you select the "OpenAI" engine and are using the official API.
-    *   Can be left blank if your OpenAI-compatible proxy does not require an API key, or if you select the "Kokoro FastAPI" engine.
+    *   Displayed only if "OpenAI" engine is selected.
+    *   Required for the official OpenAI API. Can be left blank if your OpenAI-compatible proxy does not need it.
 
 *   **OpenAI-compatible API URL** (`url`):
-    *   Only used if "OpenAI" engine is selected.
-    *   Defaults to `https://api.openai.com/v1/audio/speech` for the official OpenAI service.
-    *   Change this if you are using an OpenAI-compatible proxy.
+    *   Displayed only if "OpenAI" engine is selected.
+    *   Defaults to `https://api.openai.com/v1/audio/speech`. Change this if using a proxy.
 
 *   **Kokoro FastAPI URL** (`kokoro_url`):
-    *   Only used if "Kokoro FastAPI" engine is selected.
-    *   Enter the full local URL of your Kokoro FastAPI TTS endpoint (e.g., `http://localhost:8002/tts`).
+    *   Displayed only if "Kokoro FastAPI" engine is selected.
+    *   Defaults to `http://localhost:8880/v1/audio/speech`. Enter the full local URL of your Kokoro FastAPI instance.
+    *   For setting up Kokoro FastAPI, refer to the [Kokoro FastAPI GitHub project](https://github.com/remsky/Kokoro-FastAPI).
 
 *   **Model** (`model`):
-    *   Select the TTS model (e.g., `tts-1`, `tts-1-hd`).
-    *   Availability might depend on the chosen engine and your specific endpoint. The list provides common OpenAI models, but you can enter a custom model name if your backend supports it.
+    *   If "OpenAI" engine is selected, you can choose from models like `tts-1`, `tts-1-hd`, or enter a custom one.
+    *   If "Kokoro FastAPI" engine is selected, this field is fixed to "kokoro" and is not user-editable during setup.
 
 *   **Voice** (`voice`):
-    *   Select the desired voice (e.g., `alloy`, `echo`, `shimmer`).
-    *   Availability might depend on the chosen engine and your specific endpoint. The list provides common OpenAI voices, but you can enter a custom voice name.
+    *   If "OpenAI" engine is selected, choose from standard voices (e.g., `alloy`, `echo`) or enter a custom one.
+    *   If "Kokoro FastAPI" engine is selected, this is a text input field defaulting to a common voice (e.g., `af_heart`). You can enter any valid Kokoro voice name. For a list of available voices, please consult the documentation of your Kokoro FastAPI instance or the [Kokoro FastAPI project](https://github.com/remsky/Kokoro-FastAPI). The behavior of this field can be further customized in the options (see below).
 
 *   **Speed** (`speed`):
     *   Adjust the speech speed (range: 0.25 to 4.0, where 1.0 is the default).
@@ -101,15 +101,32 @@ Multiple instances of the integration can be configured, for example, to use dif
 
 ### Modifying Options After Setup
 
-Some options can be modified after the initial setup by navigating to the integration's card under **Settings → Devices & Services**, clicking the three dots, and selecting "Configure" (or by clicking the "CONFIGURE" button on the device page from the "OpenAI TTS" entry). These include:
-- Model
-- Voice
-- Speed
-- Instructions for the TTS model
-- Chime sound enablement and selection
-- Audio normalization
+After setting up the integration, you can adjust several options by navigating to its card under **Settings → Devices & Services**, clicking the three dots, and selecting "Configure" (or by clicking the "CONFIGURE" button on the device page).
 
-Note: To change the TTS Engine, API Key, or main URLs (OpenAI URL, Kokoro URL), you will need to remove and re-add the integration.
+**Common Options (available for both engines):**
+
+*   **Model**: (For OpenAI engine) Change the selected model. For Kokoro, this is fixed.
+*   **Voice**: Change the selected voice. Behavior for Kokoro engine depends on "Allow Voice Blending" (see below).
+*   **Speed**: Adjust speech speed.
+*   **Instructions**: Provide specific instructions to the TTS model (if supported).
+*   **Chime Sound**: Enable/disable and select a chime sound to play before speech.
+*   **Audio Normalization**: Enable/disable loudness normalization.
+
+**Kokoro FastAPI Specific Options:**
+
+These options are only available if you have configured the integration to use the Kokoro FastAPI engine:
+
+*   **Kokoro: Audio Chunk Size** (`kokoro_chunk_size`):
+    *   Adjusts the audio chunk size for streaming with Kokoro FastAPI. This can sometimes affect latency or intonation.
+    *   Default: `400`. Enter an integer value.
+
+*   **Kokoro: Allow Voice Blending** (`kokoro_voice_allow_blending`):
+    *   Enables or disables the ability to use blended voice strings. Default: Disabled.
+    *   **When Disabled (Default):** The "Voice" option above will be a dropdown list of standard Kokoro voices.
+    *   **When Enabled:** The "Voice" option above becomes a text input field. You can enter a single standard Kokoro voice name or a blended voice string.
+    *   **Blended Voice String Format:** A plus-separated list of voices with optional weights, e.g., `voice1(weight1)+voice2(weight2)`. Example: `af_child(0.7)+af_nova(0.3)`. Refer to the Kokoro FastAPI documentation for details on blending.
+
+**Note:** To change the core **TTS Engine** selection, main **API Key**, or primary **URLs** (OpenAI URL, Kokoro URL), you will need to remove and re-add the integration.
 
 ## Manual installation
 

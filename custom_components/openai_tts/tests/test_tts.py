@@ -20,7 +20,11 @@ from custom_components.openai_tts.const import (
     OPENAI_ENGINE,
     KOKORO_FASTAPI_ENGINE,
     CONF_KOKORO_URL,
-    UNIQUE_ID, # Assuming UNIQUE_ID is used in config
+    KOKORO_MODEL, # Added
+    UNIQUE_ID,
+    CONF_KOKORO_CHUNK_SIZE, # Added
+    DEFAULT_KOKORO_CHUNK_SIZE, # Added
+    # CONF_KOKORO_VOICE_ALLOW_BLENDING not directly tested here, but in config_flow tests
 )
 
 # Minimal HomeAssistant mock
@@ -50,10 +54,10 @@ class TestOpenAITTSEntity(unittest.IsolatedAsyncioTestCase):
         self.kokoro_config_data = {
             CONF_TTS_ENGINE: KOKORO_FASTAPI_ENGINE,
             CONF_KOKORO_URL: "http://localhost:8002/tts",
-            CONF_MODEL: "kokoro-model",
-            CONF_VOICE: "kokoro-voice",
+            CONF_MODEL: KOKORO_MODEL, # Use the constant for consistency
+            CONF_VOICE: "af_alloy", # Example Kokoro voice
             CONF_SPEED: 1.0,
-            UNIQUE_ID: "kokoro-test-unique-id"
+            UNIQUE_ID: "kokoro-test-unique-id",
             # No API key for Kokoro in this test setup
         }
         self.mock_engine = AsyncMock(spec=OpenAITTSEngine)
@@ -89,11 +93,11 @@ class TestOpenAITTSEntity(unittest.IsolatedAsyncioTestCase):
 
     async def test_device_info_kokoro(self):
         """Test device_info for Kokoro FastAPI configuration."""
-        self.config_entry_title = "Kokoro FastAPI TTS kokoro-model" # Match expected name format
+        self.config_entry_title = f"Kokoro FastAPI TTS {KOKORO_MODEL}"
         entity = self._setup_entity(self.kokoro_config_data)
         device_info = entity.device_info
         self.assertEqual(device_info["manufacturer"], "Kokoro FastAPI")
-        self.assertEqual(device_info["model"], self.kokoro_config_data[CONF_MODEL])
+        self.assertEqual(device_info["model"], KOKORO_MODEL) # Check against constant
         self.assertEqual(device_info["name"], self.config_entry_title)
 
     async def test_name_property_openai(self):
@@ -104,30 +108,34 @@ class TestOpenAITTSEntity(unittest.IsolatedAsyncioTestCase):
 
     async def test_name_property_kokoro(self):
         """Test name property for Kokoro FastAPI configuration."""
-        self.config_entry_title = "Kokoro FastAPI TTS kokoro-model"
+        self.config_entry_title = f"Kokoro FastAPI TTS {KOKORO_MODEL}"
         entity = self._setup_entity(self.kokoro_config_data)
         self.assertEqual(entity.name, self.config_entry_title)
 
-    async def test_async_get_tts_audio_streaming_success(self):
-        """Test successful audio streaming via async_get_tts_audio."""
-        entity = self._setup_entity(self.kokoro_config_data) # Using Kokoro for this test
+    async def test_async_get_tts_audio_kokoro_blended_voice(self):
+        """Test audio streaming with Kokoro and a blended voice string."""
+        blended_voice_str = "af_child(0.7)+af_nova(0.3)"
+        kokoro_config_with_options = self.kokoro_config_data.copy()
 
-        test_audio_chunks = [b"Hello", b" ", b"World"]
-        # Mock the engine's get_tts to be an async generator
-        async def mock_stream_audio(*args, **kwargs):
+        entity = self._setup_entity(kokoro_config_with_options)
+        # Simulate that the blended voice is set in options by the user
+        entity._config.options = {CONF_VOICE: blended_voice_str}
+
+        test_audio_chunks = [b"Blended", b" ", b"Audio"]
+        async def mock_stream_audio(text, voice, **kwargs): # Capture voice arg
+            self.assertEqual(voice, blended_voice_str) # Assert blended voice is passed
             for chunk in test_audio_chunks:
                 yield chunk
         self.mock_engine.get_tts = mock_stream_audio
 
-        # Call the method that internally calls get_tts_audio
-        fmt, audio_data = await entity.async_get_tts_audio("Hello World", "en-US", options={})
+        fmt, audio_data = await entity.async_get_tts_audio("Test blended audio", "en-US", options={})
 
-        self.assertEqual(fmt, "mp3") # Assuming mp3 is the format
-        self.assertEqual(audio_data, b"Hello World")
-        # self.mock_engine.get_tts.assert_called_once_with("Hello World", speed=ANY, voice=ANY, instructions=ANY)
-        # We can make assertions about arguments passed to self.mock_engine.get_tts if needed
+        self.assertEqual(fmt, "mp3")
+        self.assertEqual(audio_data, b"Blended Audio")
+        self.mock_engine.get_tts.assert_called_once() # More detailed args check in mock_stream_audio
 
-    @patch("subprocess.run") # Patch subprocess.run
+
+    @patch("subprocess.run")
     async def test_async_get_tts_audio_with_ffmpeg_processing(self, mock_subprocess_run):
         """Test audio streaming with ffmpeg (chime/normalization) correctly called."""
         # Setup mock for subprocess.run
@@ -203,32 +211,61 @@ class TestOpenAITTSEntity(unittest.IsolatedAsyncioTestCase):
         await entity.async_will_remove_from_hass()
         self.mock_engine.close.assert_called_once()
 
-    @patch('custom_components.openai_tts.tts.OpenAITTSEngine') # Patch where it's used
-    async def test_async_setup_entry_kokoro(self, MockOpenAITTSEngineConstructor):
-        """Test async_setup_entry for Kokoro configuration."""
+    @patch('custom_components.openai_tts.tts.OpenAITTSEngine')
+    async def test_async_setup_entry_kokoro_with_chunk_size_option(self, MockOpenAITTSEngineConstructor):
+        """Test async_setup_entry for Kokoro with chunk_size in options."""
         mock_engine_instance = MockOpenAITTSEngineConstructor.return_value
-        self.hass.data[DOMAIN] = {} # Ensure domain data exists
+        self.hass.data[DOMAIN] = {}
 
+        test_chunk_size = 300
+        kokoro_config_with_options = self.kokoro_config_data.copy()
+        # Simulate chunk_size being set in options (e.g., by user via UI)
         mock_config_entry = MagicMock(spec=ConfigEntry)
-        mock_config_entry.data = self.kokoro_config_data
-        mock_config_entry.options = {}
+        mock_config_entry.data = kokoro_config_with_options
+        mock_config_entry.options = {CONF_KOKORO_CHUNK_SIZE: test_chunk_size}
 
         async_add_entities_mock = MagicMock()
 
         await async_setup_entry(self.hass, mock_config_entry, async_add_entities_mock)
 
         MockOpenAITTSEngineConstructor.assert_called_once_with(
-            api_key=None, # Kokoro specific
-            voice=self.kokoro_config_data[CONF_VOICE],
-            model=self.kokoro_config_data[CONF_MODEL],
-            speed=self.kokoro_config_data[CONF_SPEED],
-            url=self.kokoro_config_data[CONF_KOKORO_URL] # Kokoro URL
+            api_key=None,
+            voice=kokoro_config_with_options[CONF_VOICE],
+            model=KOKORO_MODEL, # Ensure it uses the fixed KOKORO_MODEL
+            speed=kokoro_config_with_options[CONF_SPEED],
+            url=kokoro_config_with_options[CONF_KOKORO_URL],
+            chunk_size=test_chunk_size # Verify chunk_size is passed
         )
         async_add_entities_mock.assert_called_once()
-        # Further checks on the entity passed to async_add_entities_mock can be added.
 
     @patch('custom_components.openai_tts.tts.OpenAITTSEngine')
-    async def test_async_setup_entry_openai(self, MockOpenAITTSEngineConstructor):
+    async def test_async_setup_entry_kokoro_default_chunk_size(self, MockOpenAITTSEngineConstructor):
+        """Test async_setup_entry for Kokoro with default chunk_size (from const)."""
+        mock_engine_instance = MockOpenAITTSEngineConstructor.return_value
+        self.hass.data[DOMAIN] = {}
+
+        # No chunk_size in data or options, should use DEFAULT_KOKORO_CHUNK_SIZE
+        mock_config_entry = MagicMock(spec=ConfigEntry)
+        mock_config_entry.data = self.kokoro_config_data
+        mock_config_entry.options = {} # No options set
+
+        async_add_entities_mock = MagicMock()
+
+        await async_setup_entry(self.hass, mock_config_entry, async_add_entities_mock)
+
+        MockOpenAITTSEngineConstructor.assert_called_once_with(
+            api_key=None,
+            voice=self.kokoro_config_data[CONF_VOICE],
+            model=KOKORO_MODEL,
+            speed=self.kokoro_config_data[CONF_SPEED],
+            url=self.kokoro_config_data[CONF_KOKORO_URL],
+            chunk_size=DEFAULT_KOKORO_CHUNK_SIZE # Verify default chunk_size
+        )
+        async_add_entities_mock.assert_called_once()
+
+
+    @patch('custom_components.openai_tts.tts.OpenAITTSEngine')
+    async def test_async_setup_entry_openai_no_chunk_size(self, MockOpenAITTSEngineConstructor):
         """Test async_setup_entry for OpenAI configuration."""
         mock_engine_instance = MockOpenAITTSEngineConstructor.return_value
         self.hass.data[DOMAIN] = {}
