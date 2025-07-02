@@ -87,8 +87,23 @@ async def async_setup_entry(
         url=api_url,
         chunk_size=kokoro_chunk_size # Pass chunk_size to engine
     )
+    
+    # ---- START DEBUG ----
+    _LOGGER.error("DEBUG: Attempting to instantiate KokoroOpenAITTSEntity.")
+    _LOGGER.error("DEBUG: Type of KokoroOpenAITTSEntity variable in this scope: %s", type(KokoroOpenAITTSEntity))
+    try:
+        our_class_from_mro = KokoroOpenAITTSEntity.mro()[0] # Should be custom_components.openai_tts.tts.KokoroOpenAITTSEntity
+        _LOGGER.error("DEBUG: MRO[0] is: %s", our_class_from_mro)
+        _LOGGER.error("DEBUG: MRO[0].__init__ signature: %s", inspect.signature(our_class_from_mro.__init__))
+        
+        # Also inspect the __init__ of the variable KokoroOpenAITTSEntity directly, as before
+        _LOGGER.error("DEBUG: Direct KokoroOpenAITTSEntity __init__ signature: %s", inspect.signature(KokoroOpenAITTSEntity.__init__))
 
-    entity = OpenAITTSEntity(hass, config_entry, engine)
+    except Exception as e_inspect:
+        _LOGGER.error("DEBUG: Error inspecting KokoroOpenAITTSEntity: %s", e_inspect)
+    # ---- END DEBUG ----
+
+    entity = KokoroOpenAITTSEntity(hass, config_entry, engine)
     async_add_entities([entity])
 
     # Register the streaming view
@@ -170,8 +185,12 @@ class OpenAITTSStreamingView(HomeAssistantView):
             # For robustness, one might check `response.prepared` but for now, re-raise.
             raise
 
+# ---- START DEBUG ----
+import inspect
+_LOGGER.error("DEBUG: About to define KokoroOpenAITTSEntity. Current globals: %s", 'KokoroOpenAITTSEntity' in globals())
+# ---- END DEBUG ----
 
-class OpenAITTSEntity(TextToSpeechEntity):
+class KokoroOpenAITTSEntity(TextToSpeechEntity):
     _attr_has_entity_name = True
     _attr_should_poll = False
 
@@ -231,7 +250,7 @@ import hashlib # For message hashing
 
 # ... (other imports remain the same) ...
 
-class OpenAITTSEntity(TextToSpeechEntity):
+class KokoroOpenAITTSEntity(TextToSpeechEntity):
     # ... (other properties remain the same) ...
 
     async def get_tts_audio(
