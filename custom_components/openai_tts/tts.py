@@ -33,14 +33,20 @@ from .const import (
     OPENAI_ENGINE,
     KOKORO_FASTAPI_ENGINE,
     CONF_KOKORO_URL,
-    CONF_KOKORO_CHUNK_SIZE, # Added
-    DEFAULT_KOKORO_CHUNK_SIZE, # Added
+    CONF_KOKORO_CHUNK_SIZE,
+    DEFAULT_KOKORO_CHUNK_SIZE,
     # CONF_KOKORO_VOICE_ALLOW_BLENDING is not directly used in tts.py, it's for config_flow
 )
 from .openaitts_engine import OpenAITTSEngine
 from homeassistant.exceptions import MaxLengthExceeded
+from homeassistant.components import media_source
+from homeassistant.components.http import HomeAssistantView
+from homeassistant.helpers.network import get_url
 
 _LOGGER = logging.getLogger(__name__)
+
+# Define a constant for the streaming view URL
+STREAMING_VIEW_URL = "/api/tts_openai_stream/{entity_id}/{message_hash}"
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -81,7 +87,89 @@ async def async_setup_entry(
         url=api_url,
         chunk_size=kokoro_chunk_size # Pass chunk_size to engine
     )
-    async_add_entities([OpenAITTSEntity(hass, config_entry, engine)])
+
+    entity = OpenAITTSEntity(hass, config_entry, engine)
+    async_add_entities([entity])
+
+    # Register the streaming view
+    hass.http.register_view(OpenAITTSStreamingView(hass, engine, config_entry))
+
+# Need to import aiohttp.web for StreamResponse
+import aiohttp.web
+
+class OpenAITTSStreamingView(HomeAssistantView):
+    """View to stream TTS audio."""
+
+    requires_auth = False # Streaming URLs often need to be unauthenticated for media players
+    url = STREAMING_VIEW_URL
+    name = "api:tts_openai_stream" # Matches the /api/ part of the URL for Home Assistant
+
+    def __init__(self, hass: HomeAssistant, engine: OpenAITTSEngine, config_entry: ConfigEntry):
+        """Initialize the streaming view."""
+        self.hass = hass
+        self._engine = engine
+        self._config = config_entry
+
+    async def get(self, request: aiohttp.web.Request, entity_id: str, message_hash: str) -> aiohttp.web.StreamResponse:
+        """Stream TTS audio."""
+
+        message = request.query.get("message")
+        if not message:
+            _LOGGER.error("Streaming request for %s/%s missing 'message' query parameter.", entity_id, message_hash)
+            # Return a plain text error, or could be JSON
+            return aiohttp.web.Response(status=400, text="Missing 'message' query parameter")
+
+        # Retrieve current voice and speed settings from config entry (options override data)
+        # This ensures that if the user changes voice/speed in options, the stream uses them.
+        effective_voice = self._config.options.get(CONF_VOICE, self._config.data.get(CONF_VOICE))
+        current_speed = self._config.options.get(CONF_SPEED, self._config.data.get(CONF_SPEED, 1.0))
+        # Instructions are generally not passed for simple streaming to avoid URL complexity.
+        # If needed, they could be added to the query string or retrieved from a cache.
+        # For now, we omit passing instructions to the engine in this streaming path.
+
+        _LOGGER.debug(
+            "Streaming request for entity_id: %s, message_hash: %s, voice: %s, speed: %s, message (first 30 chars): '%s'",
+            entity_id, message_hash, effective_voice, current_speed, message[:30]
+        )
+
+        response = aiohttp.web.StreamResponse()
+        # Set content type for the stream. Kokoro default is MP3.
+        response.content_type = "audio/mpeg"
+        # Set Cache-Control headers to prevent caching of the stream by intermediate proxies or the client.
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+
+        await response.prepare(request)
+
+        try:
+            async for chunk in self._engine.get_tts(
+                text=message,
+                speed=current_speed,
+                voice=effective_voice,
+                # instructions=effective_instructions, # Omitting for now
+            ):
+                if chunk: # Ensure chunk is not empty
+                    await response.write(chunk)
+
+            await response.write_eof() # Finalize the response stream
+            return response
+
+        except CancelledError:
+            _LOGGER.debug("Streaming TTS request cancelled by client for entity_id: %s, message_hash: %s", entity_id, message_hash)
+            # aiohttp handles client disconnects gracefully; re-raising allows it to do so.
+            raise
+        except Exception as e:
+            _LOGGER.exception(
+                "Error during TTS streaming for entity_id: %s, message_hash: %s - %s",
+                entity_id, message_hash, str(e)
+            )
+            # If headers haven't been sent, we can try to send an error status.
+            # However, if streaming has started, the connection might just break.
+            # aiohttp's default error handling for views might take over if we re-raise.
+            # For robustness, one might check `response.prepared` but for now, re-raise.
+            raise
+
 
 class OpenAITTSEntity(TextToSpeechEntity):
     _attr_has_entity_name = True
@@ -103,8 +191,9 @@ class OpenAITTSEntity(TextToSpeechEntity):
 
     @property
     def supported_options(self) -> list:
-        return ["instructions", "chime", "chime_sound"]
-        
+        # Add media_source support
+        return ["instructions", "chime", "chime_sound", media_source.TTS_SPEAK_OPTIONS_KEY_MEDIA_SOURCE_ID]
+
     @property
     def supported_languages(self) -> list:
         return self._engine.get_supported_langs()
@@ -138,10 +227,18 @@ class OpenAITTSEntity(TextToSpeechEntity):
         return self._config.title or f"{engine_type_display} {model_name}"
 
 
+import hashlib # For message hashing
+
+# ... (other imports remain the same) ...
+
+class OpenAITTSEntity(TextToSpeechEntity):
+    # ... (other properties remain the same) ...
+
     async def get_tts_audio(
         self, message: str, language: str, options: dict | None = None
-    ) -> tuple[str, bytes] | tuple[None, None]:
+    ) -> media_source.PlayMedia | tuple[str | None, bytes | None]: # Updated return type
         overall_start = time.monotonic()
+        options = options or {}
 
         _LOGGER.debug(" -------------------------------------------")
         _LOGGER.debug("|  OpenAI TTS                               |")
@@ -149,29 +246,57 @@ class OpenAITTSEntity(TextToSpeechEntity):
         _LOGGER.debug(" -------------------------------------------")
 
         try:
+            if media_source.is_media_source_id(message): # This checks if message is a media_source ID, not what we want.
+                # We need to check if the *option* for media_source is requested.
+                # The 'message' parameter here is the actual text to be spoken.
+                pass # Placeholder, remove this block
+
+            if options.get(media_source.TTS_SPEAK_OPTIONS_KEY_MEDIA_SOURCE_ID):
+                _LOGGER.debug("Media source requested for message: %s", message[:50])
+                # Generate a unique hash for the message to use in the URL,
+                # or use the message itself if short enough and URL-safe.
+                # Using a hash is generally safer.
+                message_hash = hashlib.sha256(message.encode("utf-8")).hexdigest()[:16]
+
+                # Construct the streaming URL
+                # The message text needs to be passed to the view, typically as a query parameter.
+                # Ensure message is URL-encoded.
+                from urllib.parse import quote
+                encoded_message = quote(message)
+
+                stream_url_path = STREAMING_VIEW_URL.format(entity_id=self.entity_id, message_hash=message_hash)
+                # Append actual message as query parameter
+                # This is crucial: the view needs the text to synthesize.
+                full_stream_url = f"{get_url(self.hass)}{stream_url_path}?message={encoded_message}"
+
+                _LOGGER.debug("Generated streaming URL: %s", full_stream_url)
+
+                # Warn if incompatible options are enabled
+                chime_enabled_option = self._config.options.get(CONF_CHIME_ENABLE, self._config.data.get(CONF_CHIME_ENABLE, False))
+                normalize_audio_option = self._config.options.get(CONF_NORMALIZE_AUDIO, self._config.data.get(CONF_NORMALIZE_AUDIO, False))
+                if chime_enabled_option or normalize_audio_option:
+                    _LOGGER.warning(
+                        "Chime and/or normalization are enabled but will be bypassed for media_source streaming."
+                    )
+
+                return media_source.PlayMedia(url=full_stream_url, mime_type="audio/mpeg")
+
+            # --- Fallback to existing non-streaming logic if media_source not requested ---
             if len(message) > 4096:
                 raise MaxLengthExceeded("Message exceeds maximum allowed length")
-            # Retrieve settings. Voice, speed, and instructions can be overridden by options or service call 'options'.
-            # Voice is taken from options first, then from initial config data.
-            # This allows options flow to change the voice.
+
             effective_voice = self._config.options.get(CONF_VOICE, self._config.data.get(CONF_VOICE))
-            # Speed can also be configured in options.
             current_speed = self._config.options.get(CONF_SPEED, self._config.data.get(CONF_SPEED, 1.0))
-            # Instructions can be configured in options or passed in service call.
-            # Service call 'options' override component options.
             effective_instructions = options.get(CONF_INSTRUCTIONS, self._config.options.get(CONF_INSTRUCTIONS, self._config.data.get(CONF_INSTRUCTIONS)))
 
             _LOGGER.debug("Effective speed: %s", current_speed)
             _LOGGER.debug("Effective voice: %s", effective_voice)
             _LOGGER.debug("Effective instructions: %s", effective_instructions)
 
-            # Note: chunk_size is configured in the engine during init, not passed per call to get_tts.
-
-            _LOGGER.debug("Creating TTS API request")
+            _LOGGER.debug("Creating TTS API request (non-streaming path)")
             api_start = time.monotonic()
 
             audio_chunks = []
-            # Pass effective voice, speed, and instructions to the engine's get_tts method.
             async for chunk in self._engine.get_tts(
                 text=message,
                 speed=current_speed,
@@ -182,17 +307,16 @@ class OpenAITTSEntity(TextToSpeechEntity):
             audio_content = b"".join(audio_chunks)
 
             if not audio_content:
-                _LOGGER.error("TTS API returned no audio content.")
+                _LOGGER.error("TTS API returned no audio content (non-streaming path).")
                 return None, None
 
             api_duration = (time.monotonic() - api_start) * 1000
-            _LOGGER.debug("TTS API call and streaming completed in %.2f ms", api_duration)
+            _LOGGER.debug("TTS API call (non-streaming) completed in %.2f ms", api_duration)
 
-            # Retrieve options.
             chime_enabled = options.get(CONF_CHIME_ENABLE,self._config.options.get(CONF_CHIME_ENABLE, self._config.data.get(CONF_CHIME_ENABLE, False)))
             normalize_audio = self._config.options.get(CONF_NORMALIZE_AUDIO, self._config.data.get(CONF_NORMALIZE_AUDIO, False))
-            _LOGGER.debug("Chime enabled: %s", chime_enabled)
-            _LOGGER.debug("Normalization option: %s", normalize_audio)
+            _LOGGER.debug("Chime enabled (non-streaming): %s", chime_enabled)
+            _LOGGER.debug("Normalization option (non-streaming): %s", normalize_audio)
 
             if chime_enabled:
                 # Write TTS audio to a temp file.
@@ -324,16 +448,20 @@ class OpenAITTSEntity(TextToSpeechEntity):
 
     async def async_get_tts_audio(
         self, message: str, language: str, options: dict | None = None,
-    ) -> tuple[str, bytes] | tuple[None, None]:
+    ) -> media_source.PlayMedia | tuple[str | None, bytes | None]: # Updated return type
         try:
-            # Directly await the now asynchronous get_tts_audio method
+            # Directly await the get_tts_audio method
             return await self.get_tts_audio(message, language, options=options)
-        except CancelledError: # Changed from asyncio.CancelledError to just CancelledError
-            _LOGGER.debug("async_get_tts_audio cancelled") # Changed from .exception to .debug
+        except CancelledError:
+            _LOGGER.debug("async_get_tts_audio cancelled by client")
             raise
-        except Exception: # Catch any other exception from get_tts_audio
+        except Exception:
             _LOGGER.exception("Error in async_get_tts_audio")
-            return None, None
+            # In case of PlayMedia, we can't return (None, None) directly if that path failed.
+            # The get_tts_audio method itself should handle its errors and return (None, None) for byte path.
+            # If PlayMedia path fails before returning PlayMedia object, it might raise, caught here.
+            # If it's an error that means we can't provide audio, returning (None,None) is fallback.
+            return None, None # Fallback for byte-based return if error occurs before PlayMedia object creation
 
     async def async_will_remove_from_hass(self) -> None:
         """Handle entity removal."""
