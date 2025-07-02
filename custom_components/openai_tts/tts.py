@@ -228,12 +228,14 @@ class KokoroOpenAITTSEntity(TextToSpeechEntity):
     @property
     def supported_options(self) -> list:
         # Add media_source support and other existing options
-        return [
+        options = [
             "instructions",
             "chime",
             "chime_sound",
-            media_source.TTS_SPEAK_OPTIONS_KEY_MEDIA_SOURCE_ID
         ]
+        if hasattr(media_source, 'TTS_SPEAK_OPTIONS_KEY_MEDIA_SOURCE_ID'):
+            options.append(media_source.TTS_SPEAK_OPTIONS_KEY_MEDIA_SOURCE_ID)
+        return options
 
     @property
     def supported_languages(self) -> list:
