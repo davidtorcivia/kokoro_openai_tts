@@ -89,19 +89,19 @@ async def async_setup_entry(
     )
     
     # ---- START DEBUG ----
-    _LOGGER.error("DEBUG: Attempting to instantiate KokoroOpenAITTSEntity.")
-    _LOGGER.error("DEBUG: Type of KokoroOpenAITTSEntity variable in this scope: %s", type(KokoroOpenAITTSEntity))
+    _LOGGER.debug("DEBUG: Attempting to instantiate KokoroOpenAITTSEntity.")
+    _LOGGER.debug("DEBUG: Type of KokoroOpenAITTSEntity variable in this scope: %s", type(KokoroOpenAITTSEntity))
     try:
         our_class_from_mro = KokoroOpenAITTSEntity.mro()[0] # Should be custom_components.openai_tts.tts.KokoroOpenAITTSEntity
-        _LOGGER.error("DEBUG: MRO[0] is: %s", our_class_from_mro)
-        _LOGGER.error("DEBUG: MRO[0].__init__ signature: %s", inspect.signature(our_class_from_mro.__init__))
+        _LOGGER.debug("DEBUG: MRO[0] is: %s", our_class_from_mro)
+        _LOGGER.debug("DEBUG: MRO[0].__init__ signature: %s", inspect.signature(our_class_from_mro.__init__))
         
         # Also inspect the __init__ of the variable KokoroOpenAITTSEntity directly, as before
-        _LOGGER.error("DEBUG: Direct KokoroOpenAITTSEntity __init__ signature: %s", inspect.signature(KokoroOpenAITTSEntity.__init__))
-        _LOGGER.error("DEBUG: KokoroOpenAITTSEntity.this_is_a_test_method signature: %s", inspect.signature(KokoroOpenAITTSEntity.this_is_a_test_method))
+        _LOGGER.debug("DEBUG: Direct KokoroOpenAITTSEntity __init__ signature: %s", inspect.signature(KokoroOpenAITTSEntity.__init__))
+        _LOGGER.debug("DEBUG: KokoroOpenAITTSEntity.this_is_a_test_method signature: %s", inspect.signature(KokoroOpenAITTSEntity.this_is_a_test_method))
 
     except Exception as e_inspect:
-        _LOGGER.error("DEBUG: Error inspecting KokoroOpenAITTSEntity: %s", e_inspect)
+        _LOGGER.debug("DEBUG: Error inspecting KokoroOpenAITTSEntity: %s", e_inspect)
     # ---- END DEBUG ----
 
     entity = KokoroOpenAITTSEntity(hass, config_entry, engine)
