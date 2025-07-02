@@ -35,24 +35,32 @@ class OpenAITTSEngine:
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
-        data = {
-            "model": self._model, # This should be the actual model name to send to the API
-            "input": text,
-            "voice": current_voice,
-            "response_format": "mp3",
-            "speed": current_speed
-        }
-
-        # Add chunk_size to payload if it's set and the engine is Kokoro
-        # We identify Kokoro by checking if the configured model name is KOKORO_MODEL.
-        if self._chunk_size is not None and self._model == KOKORO_MODEL:
-            data["chunk_size"] = self._chunk_size
-            _LOGGER.debug("Using chunk_size %s for Kokoro request", self._chunk_size)
-
-        # Handling for instructions - ensure this model check is appropriate for your setup
-        # This 'gpt-4o-mini-tts' might be a custom name for your OpenAI compatible proxy or specific Kokoro setup
-        if instructions is not None and self._model == "gpt-4o-mini-tts":
-            data["instructions"] = instructions
+        if self._model == KOKORO_MODEL:
+            # Payload for Kokoro - does not include 'model' key
+            data = {
+                "input": text,
+                "voice": current_voice,
+                "response_format": "mp3",
+                "speed": current_speed
+            }
+            if self._chunk_size is not None:
+                data["chunk_size"] = self._chunk_size
+                _LOGGER.debug("Using chunk_size %s for Kokoro request", self._chunk_size)
+            # Note: Instructions are not typically part of the linked Kokoro-FastAPI server's basic endpoint.
+            # If your Kokoro server handles 'instructions', it would need to be added here conditionally too.
+        else:
+            # Payload for OpenAI or other compatible engines
+            data = {
+                "model": self._model,
+                "input": text,
+                "voice": current_voice,
+                "response_format": "mp3",
+                "speed": current_speed
+            }
+            # Handling for instructions - ensure this model check is appropriate for your setup
+            # This 'gpt-4o-mini-tts' might be a custom name for your OpenAI compatible proxy
+            if instructions is not None and self._model == "gpt-4o-mini-tts": # This specific model check might need to be more generic if instructions are supported by other openai models
+                data["instructions"] = instructions
 
         _LOGGER.debug("Requesting TTS from URL: %s", self._url)
         _LOGGER.debug("Request Headers: %s", headers)
