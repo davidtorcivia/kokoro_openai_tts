@@ -54,7 +54,9 @@ class OpenAITTSEngine:
         if instructions is not None and self._model == "gpt-4o-mini-tts":
             data["instructions"] = instructions
 
-        _LOGGER.debug("Requesting TTS with data: %s", data) # Log the data being sent
+        _LOGGER.debug("Requesting TTS from URL: %s", self._url)
+        _LOGGER.debug("Request Headers: %s", headers)
+        _LOGGER.debug("Request Payload: %s", data)
 
         try:
             async with self._session.post(

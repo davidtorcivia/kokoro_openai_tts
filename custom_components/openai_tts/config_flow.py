@@ -191,6 +191,8 @@ class OpenAITTSConfigFlow(ConfigFlow, domain=DOMAIN):
         # This part is executed if user_input is None (first time showing this step)
         # OR if user_input was provided but resulted in errors.
         data_schema_engine = {}
+        # Get the current state of allow_blending from user_input if available, otherwise default to False
+        allow_blending = user_input.get(CONF_KOKORO_VOICE_ALLOW_BLENDING, False) if user_input else False
 
         if current_engine == OPENAI_ENGINE:
             data_schema_engine.update({
@@ -212,15 +214,30 @@ class OpenAITTSConfigFlow(ConfigFlow, domain=DOMAIN):
         elif current_engine == KOKORO_FASTAPI_ENGINE:
             data_schema_engine.update({
                 vol.Required(CONF_KOKORO_URL, default=user_input.get(CONF_KOKORO_URL) if user_input else KOKORO_DEFAULT_URL): TextSelector(TextSelectorConfig(type=TextSelectorType.URL)),
-                vol.Required(CONF_VOICE, default=user_input.get(CONF_VOICE, KOKORO_VOICES[0]) if user_input else KOKORO_VOICES[0]): selector({
+                vol.Optional(CONF_KOKORO_VOICE_ALLOW_BLENDING, default=allow_blending): bool,
+            })
+            # Dynamically set voice field
+            if allow_blending:
+                data_schema_engine[vol.Required(
+                    CONF_VOICE,
+                    default=user_input.get(CONF_VOICE, "") if user_input else ""
+                )] = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT))
+            else:
+                data_schema_engine[vol.Required(
+                    CONF_VOICE,
+                    default=user_input.get(CONF_VOICE, KOKORO_VOICES[0]) if user_input else KOKORO_VOICES[0]
+                )] = selector({
                     "select": {
                         "options": KOKORO_VOICES,
-                        "mode": "dropdown",
-                        "sort": True,
-                        "custom_value": False
+                        "mode": "dropdown", "sort": True, "custom_value": False
                     }
-                }),
-            })
+                })
+            # Add chunk size for Kokoro
+            data_schema_engine[vol.Optional(
+                CONF_KOKORO_CHUNK_SIZE,
+                default=user_input.get(CONF_KOKORO_CHUNK_SIZE, DEFAULT_KOKORO_CHUNK_SIZE) if user_input else DEFAULT_KOKORO_CHUNK_SIZE
+            )] = vol.Coerce(int)
+
 
         # Common field for both engines - Speed
         # Default handling: if user_input exists (form re-shown due to error), use its value, else use default.
@@ -259,49 +276,78 @@ class OpenAITTSOptionsFlow(OptionsFlow):
         errors: dict[str, str] = {}
         engine_type = self.config_entry.data.get(CONF_TTS_ENGINE, DEFAULT_TTS_ENGINE)
 
-        # Determine current allow_blending setting (from user_input or existing options)
-        # This is needed to dynamically set the voice field type
-        if user_input is not None:
-            current_allow_blending = user_input.get(CONF_KOKORO_VOICE_ALLOW_BLENDING, False)
-        else:
-            current_allow_blending = self.config_entry.options.get(CONF_KOKORO_VOICE_ALLOW_BLENDING, False)
+        # Determine current_allow_blending based on the source:
+        # 1. User input from the current form submission (if any field was changed).
+        # 2. Existing options if no user input yet for this specific field.
+        # 3. Default to False if not in options.
+
+        # Store previous blending state to detect changes
+        prev_allow_blending = self.config_entry.options.get(CONF_KOKORO_VOICE_ALLOW_BLENDING, False)
 
         if user_input is not None:
+            current_allow_blending = user_input.get(CONF_KOKORO_VOICE_ALLOW_BLENDING, prev_allow_blending)
+            # If blending mode changed, we might need to re-show the form immediately
+            # For now, we'll let it validate and then the next display of the form will be correct.
+            # A more advanced setup would re-show here if only the checkbox changed.
+
             if engine_type == KOKORO_FASTAPI_ENGINE:
                 chunk_size = user_input.get(CONF_KOKORO_CHUNK_SIZE)
                 if chunk_size is not None and (not isinstance(chunk_size, int) or chunk_size <= 0):
                     errors[CONF_KOKORO_CHUNK_SIZE] = "invalid_chunk_size"
 
+            # If CONF_KOKORO_VOICE_ALLOW_BLENDING was just changed, we might want to clear the voice
+            # field if the type changed, or ensure its value is valid for the new type.
+            # For simplicity, we'll rely on Voluptuous to raise error if type is wrong on submission.
+            # A better UX might clear CONF_VOICE if the type changes.
+
             if not errors:
-                return self.async_create_entry(title="", data=user_input)
+                # Ensure all relevant data is included for create_entry
+                # user_input might only contain changed fields.
+                # We need to merge with existing options.
+                final_options = self.config_entry.options.copy()
+                final_options.update(user_input)
+                return self.async_create_entry(title="", data=final_options)
+        else:
+            # First time showing the form, or re-showing after an error from a previous attempt (where user_input would not be None)
+            current_allow_blending = self.config_entry.options.get(CONF_KOKORO_VOICE_ALLOW_BLENDING, False)
+            # Populate user_input with existing options to pre-fill the form
+            user_input = {**self.config_entry.options}
+
 
         chime_options = await self.hass.async_add_executor_job(get_chime_options)
-
         options_schema_dict = {}
+
         # Engine-specific options first
         if engine_type == KOKORO_FASTAPI_ENGINE:
             options_schema_dict.update({
                 vol.Optional(
                     CONF_KOKORO_VOICE_ALLOW_BLENDING,
-                    default=self.config_entry.options.get(CONF_KOKORO_VOICE_ALLOW_BLENDING, False)
-                ): bool, # Simple boolean toggle
+                    default=current_allow_blending # Use the most up-to-date value
+                ): bool,
                 vol.Optional(
                     CONF_KOKORO_CHUNK_SIZE,
-                    default=self.config_entry.options.get(CONF_KOKORO_CHUNK_SIZE, DEFAULT_KOKORO_CHUNK_SIZE)
-                ): vol.Coerce(int), # Integer input for chunk size
+                    default=user_input.get(CONF_KOKORO_CHUNK_SIZE, DEFAULT_KOKORO_CHUNK_SIZE)
+                ): vol.Coerce(int),
             })
-            # Dynamically set voice field type based on blending option
-            if current_allow_blending:
-                options_schema_dict[vol.Optional(
-                    CONF_VOICE,
-                    default=self.config_entry.options.get(CONF_VOICE, self.config_entry.data.get(CONF_VOICE, KOKORO_VOICES[0]))
-                )] = cv.string
-            else:
-                options_schema_dict[vol.Optional(
-                    CONF_VOICE,
-                    default=self.config_entry.options.get(CONF_VOICE, self.config_entry.data.get(CONF_VOICE, KOKORO_VOICES[0]))
-                )] = vol.In(KOKORO_VOICES)
 
+            # Default voice: try from user_input (if re-showing form), then options, then data, then default
+            default_voice_for_field = user_input.get(CONF_VOICE, self.config_entry.data.get(CONF_VOICE, KOKORO_VOICES[0]))
+
+            if current_allow_blending:
+                # If blending is now allowed, but previous voice was from selector, it might not be a good default.
+                # If previous was text, it's a good default.
+                # If the type changed, it might be better to default to empty string for text field.
+                if not prev_allow_blending: # If we just switched to blending
+                     default_voice_for_field = user_input.get(CONF_VOICE, "") # Default to empty if switching to text
+                else: # Sticking with blending or form re-shown with blending already on
+                     default_voice_for_field = user_input.get(CONF_VOICE, default_voice_for_field)
+
+                options_schema_dict[vol.Optional(CONF_VOICE, default=default_voice_for_field)] = cv.string
+            else:
+                # If blending is not allowed, ensure default is one of KOKORO_VOICES
+                if default_voice_for_field not in KOKORO_VOICES:
+                    default_voice_for_field = KOKORO_VOICES[0] # Fallback to first predefined voice
+                options_schema_dict[vol.Optional(CONF_VOICE, default=default_voice_for_field)] = vol.In(KOKORO_VOICES)
         else: # OpenAI
             options_schema_dict.update({
                 vol.Optional(CONF_MODEL, default=self.config_entry.options.get(CONF_MODEL, self.config_entry.data.get(CONF_MODEL, "tts-1"))): selector({

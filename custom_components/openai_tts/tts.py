@@ -297,7 +297,10 @@ class KokoroOpenAITTSEntity(TextToSpeechEntity):
 
         try:
             # Check if media_source streaming is requested via options
-            if options.get(media_source.TTS_SPEAK_OPTIONS_KEY_MEDIA_SOURCE_ID):
+            media_source_id_key_available = hasattr(media_source, 'TTS_SPEAK_OPTIONS_KEY_MEDIA_SOURCE_ID')
+            should_stream_via_media_source = media_source_id_key_available and options.get(media_source.TTS_SPEAK_OPTIONS_KEY_MEDIA_SOURCE_ID)
+
+            if should_stream_via_media_source:
                 _LOGGER.debug("Media source streaming requested for message: %s", message[:50])
 
                 message_hash = hashlib.sha256(message.encode("utf-8")).hexdigest()[:16]
