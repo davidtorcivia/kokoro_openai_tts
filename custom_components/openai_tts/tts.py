@@ -187,8 +187,10 @@ class OpenAITTSStreamingView(HomeAssistantView):
 
 # ---- START DEBUG ----
 import inspect
-_LOGGER.error("DEBUG: About to define KokoroOpenAITTSEntity. Current globals: %s", 'KokoroOpenAITTSEntity' in globals())
+# _LOGGER.error("DEBUG: About to define KokoroOpenAITTSEntity. Current globals: %s", 'KokoroOpenAITTSEntity' in globals()) # Removed to reduce noise
 # ---- END DEBUG ----
+
+import hashlib # For message hashing
 
 class KokoroOpenAITTSEntity(TextToSpeechEntity):
     _attr_has_entity_name = True
@@ -200,62 +202,80 @@ class KokoroOpenAITTSEntity(TextToSpeechEntity):
         self._config = config
         self._attr_unique_id = config.data.get(UNIQUE_ID)
         if not self._attr_unique_id:
-            self._attr_unique_id = f"{config.data.get(CONF_URL)}_{config.data.get(CONF_MODEL)}"
-        base_name = self._config.data.get(CONF_MODEL, "").upper()
-        self.entity_id = generate_entity_id("tts.openai_tts_{}", base_name.lower(), hass=hass)
+            # Fallback unique ID using URL and model if specific UNIQUE_ID isn't set
+            # This helps ensure stability even if UNIQUE_ID was missed during initial setup for some reason.
+            url_part = config.data.get(CONF_URL, "unknown_url")
+            model_part = config.data.get(CONF_MODEL, "unknown_model")
+            self._attr_unique_id = f"{url_part}_{model_part}"
+
+        # Ensure entity_id is generated correctly using the base name.
+        # The base name could be derived from the model or a more generic name if model is not descriptive.
+        base_name = self._config.data.get(CONF_MODEL, "openai_tts").replace("-", "_").lower() # Sanitize for entity ID
+        self.entity_id = generate_entity_id(
+            "tts.{}", # Use the platform name prefix for consistency
+            f"{DOMAIN}_{base_name}", # Combine domain and sanitized base name
+            hass=hass
+        )
+        _LOGGER.debug("Initialized KokoroOpenAITTSEntity with entity_id: %s and unique_id: %s", self.entity_id, self._attr_unique_id)
+
 
     @property
     def default_language(self) -> str:
-        return "en"
+        return "en" # OpenAI models generally default to English or auto-detect
 
     @property
     def supported_options(self) -> list:
-        # Add media_source support
-        return ["instructions", "chime", "chime_sound", media_source.TTS_SPEAK_OPTIONS_KEY_MEDIA_SOURCE_ID]
+        # Add media_source support and other existing options
+        return [
+            "instructions",
+            "chime",
+            "chime_sound",
+            media_source.TTS_SPEAK_OPTIONS_KEY_MEDIA_SOURCE_ID
+        ]
 
     @property
     def supported_languages(self) -> list:
-        return self._engine.get_supported_langs()
+        # Delegate to the engine if it has a method for this, otherwise return a sensible default.
+        if hasattr(self._engine, 'get_supported_langs'):
+            return self._engine.get_supported_langs()
+        return ["en"] # Fallback if engine doesn't specify
 
     @property
     def device_info(self) -> dict:
         engine_type = self._config.data.get(CONF_TTS_ENGINE, OPENAI_ENGINE)
         manufacturer = "OpenAI"
+        model_identifier = self._config.data.get(CONF_MODEL, "Generic TTS")
+
         if engine_type == KOKORO_FASTAPI_ENGINE:
             manufacturer = "Kokoro FastAPI"
+            # For Kokoro, the model might be more abstract or tied to the Kokoro instance
+            model_identifier = f"Kokoro ({model_identifier})"
+
 
         return {
-            "identifiers": {(DOMAIN, self._attr_unique_id)},
-            "model": self._config.data.get(CONF_MODEL), # Model display can be kept as is
+            "identifiers": {(DOMAIN, self._attr_unique_id)}, # Use the unique_id for device identification
+            "name": self.name, # The entity name, which is usually descriptive
             "manufacturer": manufacturer,
-            "name": self.name, # Add entity name to device name for clarity
-            "sw_version": "1.0", # Example, can be dynamic if integration has versions
+            "model": model_identifier,
+            "sw_version": "1.0", # Placeholder, could be dynamic
         }
 
     @property
     def name(self) -> str:
-        # The title of the config entry is usually more descriptive and set in config_flow
-        # This name property is for the entity itself.
-        # Example: "OpenAI TTS tts-1" or "Kokoro TTS tts-1-hd"
+        # Attempt to use the config entry's title for a user-friendly name.
+        # Fallback to a generated name if title is not available.
+        if self._config.title:
+            return self._config.title
+
         engine_type_display = "OpenAI"
         if self._config.data.get(CONF_TTS_ENGINE) == KOKORO_FASTAPI_ENGINE:
             engine_type_display = "Kokoro FastAPI"
-
-        model_name = self._config.data.get(CONF_MODEL, "Unknown Model")
-        # return f"{engine_type_display} TTS {model_name.upper()}" # This might be too long
-        return self._config.title or f"{engine_type_display} {model_name}"
-
-
-import hashlib # For message hashing
-
-# ... (other imports remain the same) ...
-
-class KokoroOpenAITTSEntity(TextToSpeechEntity):
-    # ... (other properties remain the same) ...
+        model_name = self._config.data.get(CONF_MODEL, "TTS")
+        return f"{engine_type_display} {model_name}"
 
     async def get_tts_audio(
         self, message: str, language: str, options: dict | None = None
-    ) -> media_source.PlayMedia | tuple[str | None, bytes | None]: # Updated return type
+    ) -> media_source.PlayMedia | tuple[str | None, bytes | None]:
         overall_start = time.monotonic()
         options = options or {}
 
@@ -263,227 +283,222 @@ class KokoroOpenAITTSEntity(TextToSpeechEntity):
         _LOGGER.debug("|  Kokoro OpenAI TTS                        |")
         _LOGGER.debug("|  https://github.com/davidtorcivia/kokoro_openai_tts |")
         _LOGGER.debug(" -------------------------------------------")
+        _LOGGER.debug("get_tts_audio called with message (first 50 chars): '%s', lang: %s, options: %s", message[:50], language, options)
+
 
         try:
-            if media_source.is_media_source_id(message): # This checks if message is a media_source ID, not what we want.
-                # We need to check if the *option* for media_source is requested.
-                # The 'message' parameter here is the actual text to be spoken.
-                pass # Placeholder, remove this block
-
+            # Check if media_source streaming is requested via options
             if options.get(media_source.TTS_SPEAK_OPTIONS_KEY_MEDIA_SOURCE_ID):
-                _LOGGER.debug("Media source requested for message: %s", message[:50])
-                # Generate a unique hash for the message to use in the URL,
-                # or use the message itself if short enough and URL-safe.
-                # Using a hash is generally safer.
-                message_hash = hashlib.sha256(message.encode("utf-8")).hexdigest()[:16]
+                _LOGGER.debug("Media source streaming requested for message: %s", message[:50])
 
-                # Construct the streaming URL
-                # The message text needs to be passed to the view, typically as a query parameter.
-                # Ensure message is URL-encoded.
+                message_hash = hashlib.sha256(message.encode("utf-8")).hexdigest()[:16]
                 from urllib.parse import quote
                 encoded_message = quote(message)
 
+                # Use self.entity_id which is now correctly initialized
                 stream_url_path = STREAMING_VIEW_URL.format(entity_id=self.entity_id, message_hash=message_hash)
-                # Append actual message as query parameter
-                # This is crucial: the view needs the text to synthesize.
-                full_stream_url = f"{get_url(self.hass)}{stream_url_path}?message={encoded_message}"
+                # Ensure full URL is correctly formed using Home Assistant's get_url helper
+                full_stream_url = f"{get_url(self.hass, prefer_external=True)}{stream_url_path}?message={encoded_message}"
+                # Added prefer_external=True for broader player compatibility if HA is behind a proxy
 
                 _LOGGER.debug("Generated streaming URL: %s", full_stream_url)
 
-                # Warn if incompatible options are enabled
                 chime_enabled_option = self._config.options.get(CONF_CHIME_ENABLE, self._config.data.get(CONF_CHIME_ENABLE, False))
                 normalize_audio_option = self._config.options.get(CONF_NORMALIZE_AUDIO, self._config.data.get(CONF_NORMALIZE_AUDIO, False))
                 if chime_enabled_option or normalize_audio_option:
                     _LOGGER.warning(
-                        "Chime and/or normalization are enabled but will be bypassed for media_source streaming."
+                        "Chime and/or normalization are enabled but will be BYPASSED for media_source streaming."
                     )
+                # Return PlayMedia object for streaming
+                return media_source.PlayMedia(url=full_stream_url, mime_type="audio/mpeg") # Assuming MP3 for OpenAI/Kokoro
 
-                return media_source.PlayMedia(url=full_stream_url, mime_type="audio/mpeg")
+            # --- Fallback to existing non-streaming logic (direct byte generation) ---
+            if len(message) > 4096: # Max length check for non-streaming
+                _LOGGER.error("Message length %d exceeds maximum allowed 4096 characters.", len(message))
+                raise MaxLengthExceeded(f"Message length {len(message)} exceeds maximum allowed 4096 characters for non-streaming TTS.")
 
-            # --- Fallback to existing non-streaming logic if media_source not requested ---
-            if len(message) > 4096:
-                raise MaxLengthExceeded("Message exceeds maximum allowed length")
 
+            # Retrieve current settings from config entry (options override data)
             effective_voice = self._config.options.get(CONF_VOICE, self._config.data.get(CONF_VOICE))
             current_speed = self._config.options.get(CONF_SPEED, self._config.data.get(CONF_SPEED, 1.0))
-            effective_instructions = options.get(CONF_INSTRUCTIONS, self._config.options.get(CONF_INSTRUCTIONS, self._config.data.get(CONF_INSTRUCTIONS)))
+            # Instructions can come from service call options, then config options, then config data
+            effective_instructions = options.get(
+                CONF_INSTRUCTIONS,
+                self._config.options.get(CONF_INSTRUCTIONS, self._config.data.get(CONF_INSTRUCTIONS))
+            )
 
-            _LOGGER.debug("Effective speed: %s", current_speed)
-            _LOGGER.debug("Effective voice: %s", effective_voice)
-            _LOGGER.debug("Effective instructions: %s", effective_instructions)
+            _LOGGER.debug(
+                "Non-streaming path. Effective settings: Voice: %s, Speed: %s, Instructions: %s",
+                effective_voice, current_speed, "Present" if effective_instructions else "Not set"
+            )
 
-            _LOGGER.debug("Creating TTS API request (non-streaming path)")
             api_start = time.monotonic()
-
             audio_chunks = []
+            # Call the engine's get_tts method (which should be async)
             async for chunk in self._engine.get_tts(
                 text=message,
                 speed=current_speed,
                 voice=effective_voice,
                 instructions=effective_instructions
+                # language=language, # Pass language if engine supports it, OpenAI typically infers or uses voice setting
             ):
-                audio_chunks.append(chunk)
+                if chunk: # Ensure chunk is not empty
+                    audio_chunks.append(chunk)
             audio_content = b"".join(audio_chunks)
 
             if not audio_content:
                 _LOGGER.error("TTS API returned no audio content (non-streaming path).")
-                return None, None
+                return "mp3", None # Consistent with HA docs for error cases
 
             api_duration = (time.monotonic() - api_start) * 1000
-            _LOGGER.debug("TTS API call (non-streaming) completed in %.2f ms", api_duration)
+            _LOGGER.debug("TTS API call (non-streaming) completed in %.2f ms, received %d bytes", api_duration, len(audio_content))
 
-            chime_enabled = options.get(CONF_CHIME_ENABLE,self._config.options.get(CONF_CHIME_ENABLE, self._config.data.get(CONF_CHIME_ENABLE, False)))
+            # Determine if chime or normalization is needed from config (options override data)
+            chime_enabled = options.get(CONF_CHIME_ENABLE, self._config.options.get(CONF_CHIME_ENABLE, self._config.data.get(CONF_CHIME_ENABLE, False)))
             normalize_audio = self._config.options.get(CONF_NORMALIZE_AUDIO, self._config.data.get(CONF_NORMALIZE_AUDIO, False))
+
             _LOGGER.debug("Chime enabled (non-streaming): %s", chime_enabled)
             _LOGGER.debug("Normalization option (non-streaming): %s", normalize_audio)
 
-            if chime_enabled:
-                # Write TTS audio to a temp file.
+            # FFmpeg processing for chime and/or normalization
+            if chime_enabled or normalize_audio:
+                # Write original TTS audio to a temporary file for FFmpeg input
                 with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tts_file:
                     tts_file.write(audio_content)
-                    tts_path = tts_file.name
-                _LOGGER.debug("TTS audio written to temp file: %s", tts_path)
+                    tts_input_path = tts_file.name
+                _LOGGER.debug("TTS audio for FFmpeg written to temp file: %s", tts_input_path)
 
-                # Determine chime file path - check options first, then fall back to configured chime sound
-                chime_file = options.get(CONF_CHIME_SOUND, self._config.options.get(CONF_CHIME_SOUND, self._config.data.get(CONF_CHIME_SOUND, "threetone.mp3")))
-                # If no .mp3 extension, append it
-                if not chime_file.lower().endswith('.mp3'):
-                    chime_file = f"{chime_file}.mp3"
-                chime_path = os.path.join(os.path.dirname(__file__), "chime", chime_file)
-                _LOGGER.debug("Using chime file at: %s", chime_path)
+                processed_output_path = "" # Path for FFmpeg output
 
-                # Create a temporary output file.
-                with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as out_file:
-                    merged_output_path = out_file.name
-
-                if normalize_audio:
-                    _LOGGER.debug("Both chime and normalization enabled; " +
-                                  "using filter_complex to normalize TTS audio and merge with chime in one pass.")
-                    # Use filter_complex to normalize the TTS audio and then concatenate with the chime.
-                    # First input: chime audio, second input: TTS audio (to be normalized).
-                    cmd = [
-                        "ffmpeg",
-                        "-y",
-                        "-i", chime_path,
-                        "-i", tts_path,
-                        "-filter_complex", "[1:a]loudnorm=I=-16:TP=-1:LRA=5[tts_norm]; [0:a][tts_norm]concat=n=2:v=0:a=1[out]",
-                        "-map", "[out]",
-                        "-ac", "1",
-                        "-ar", "24000",
-                        "-b:a", "128k",
-                        "-preset", "superfast",
-                        "-threads", "4",
-                        merged_output_path,
-                    ]
-                    _LOGGER.debug("Executing ffmpeg command: %s", " ".join(cmd))
-                    await self.hass.async_add_executor_job(partial(subprocess.run, cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE))
-                else:
-                    _LOGGER.debug("Chime enabled without normalization; merging using concat method.")
-                    # Create a file list for concatenation.
-                    with tempfile.NamedTemporaryFile(mode="w", delete=False) as list_file:
-                        list_file.write(f"file '{chime_path}'\n")
-                        list_file.write(f"file '{tts_path}'\n")
-                        list_path = list_file.name
-                    _LOGGER.debug("FFmpeg file list created: %s", list_path)
-                    cmd = [
-                        "ffmpeg",
-                        "-y",
-                        "-f", "concat",
-                        "-safe", "0",
-                        "-i", list_path,
-                        "-ac", "1",
-                        "-ar", "24000",
-                        "-b:a", "128k",
-                        "-preset", "superfast",
-                        "-threads", "4",
-                        merged_output_path,
-                    ]
-                    _LOGGER.debug("Executing ffmpeg command: %s", " ".join(cmd))
-                    await self.hass.async_add_executor_job(partial(subprocess.run, cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE))
-                    try:
-                        os.remove(list_path)
-                    except Exception:
-                        pass
-
-                with open(merged_output_path, "rb") as merged_file:
-                    final_audio = merged_file.read()
-                overall_duration = (time.monotonic() - overall_start) * 1000
-                _LOGGER.debug("Overall TTS processing time: %.2f ms", overall_duration)
-                # Cleanup temporary files.
                 try:
-                    os.remove(tts_path)
-                    os.remove(merged_output_path)
-                except Exception:
-                    pass
-                return "mp3", final_audio
-
-            else:
-                # Chime disabled.
-                if normalize_audio:
-                    _LOGGER.debug("Normalization enabled without chime; processing TTS audio via ffmpeg.")
-                    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tts_file:
-                        tts_file.write(audio_content)
-                        norm_input_path = tts_file.name
                     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as out_file:
-                        norm_output_path = out_file.name
-                    cmd = [
-                        "ffmpeg",
-                        "-y",
-                        "-i", norm_input_path,
-                        "-ac", "1",
-                        "-ar", "24000",
-                        "-b:a", "128k",
-                        "-preset", "superfast",
-                        "-threads", "4",
-                        "-af", "loudnorm=I=-16:TP=-1:LRA=5",
-                        norm_output_path,
-                    ]
-                    _LOGGER.debug("Executing ffmpeg command: %s", " ".join(cmd))
-                    await self.hass.async_add_executor_job(partial(subprocess.run, cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE))
-                    with open(norm_output_path, "rb") as norm_file:
-                        normalized_audio = norm_file.read()
-                    overall_duration = (time.monotonic() - overall_start) * 1000
-                    _LOGGER.debug("Overall TTS processing time: %.2f ms", overall_duration)
-                    try:
-                        os.remove(norm_input_path)
-                        os.remove(norm_output_path)
-                    except Exception:
-                        pass
-                    return "mp3", normalized_audio
-                else:
-                    _LOGGER.debug("Chime and normalization disabled; returning TTS MP3 audio only.")
-                    overall_duration = (time.monotonic() - overall_start) * 1000
-                    _LOGGER.debug("Overall TTS processing time: %.2f ms", overall_duration)
-                    return "mp3", audio_content
+                        processed_output_path = out_file.name
 
-        except CancelledError as ce:
-            _LOGGER.exception("TTS task cancelled")
-            return None, None
+                    ffmpeg_cmd_list = ["ffmpeg", "-y"] # Base command
+
+                    if chime_enabled:
+                        chime_file_name = options.get(CONF_CHIME_SOUND, self._config.options.get(CONF_CHIME_SOUND, self._config.data.get(CONF_CHIME_SOUND, "threetone.mp3")))
+                        if not chime_file_name.lower().endswith('.mp3'):
+                            chime_file_name = f"{chime_file_name}.mp3"
+                        chime_file_path = os.path.join(os.path.dirname(__file__), "chime", chime_file_name)
+                        _LOGGER.debug("Using chime file: %s", chime_file_path)
+
+                        if not os.path.exists(chime_file_path):
+                            _LOGGER.error("Chime file not found at %s. Skipping chime.", chime_file_path)
+                            # If chime file is missing, proceed as if chime was disabled for this part
+                            chime_enabled = False # Effectively disable chime if file is missing
+                        else:
+                            ffmpeg_cmd_list.extend(["-i", chime_file_path]) # Input 0 (chime)
+
+                    ffmpeg_cmd_list.extend(["-i", tts_input_path]) # Input 1 (or 0 if no chime) (TTS)
+
+                    filter_complex_parts = []
+                    input_label_tts = "[1:a]" if chime_enabled else "[0:a]" # TTS audio stream label
+
+                    if normalize_audio:
+                        filter_complex_parts.append(f"{input_label_tts}loudnorm=I=-16:TP=-1:LRA=5[norm_tts]")
+                        input_label_tts = "[norm_tts]" # Next operation uses normalized TTS
+
+                    if chime_enabled: # If chime file was found and chime is still enabled
+                        # Prepend chime: [0:a] is chime, input_label_tts is (possibly normalized) TTS
+                        filter_complex_parts.append(f"[0:a]{input_label_tts}concat=n=2:v=0:a=1[out]")
+                    elif normalize_audio: # Only normalization, no chime
+                        filter_complex_parts.append(f"{input_label_tts}copy[out]") # Just pass through the normalized audio
+
+                    if filter_complex_parts: # If any filtering/concatenation was done
+                        ffmpeg_cmd_list.extend(["-filter_complex", ";".join(filter_complex_parts), "-map", "[out]"])
+                    # If neither chime nor normalization (but somehow ended up in this block),
+                    # ffmpeg will just copy the input tts_input_path to processed_output_path.
+                    # This case should ideally be handled by the outer if, but as a safeguard:
+                    elif not chime_enabled and not normalize_audio:
+                         _LOGGER.warning("FFmpeg processing block entered without chime or normalize. This is unexpected.")
+                         # Fallback to just copying the TTS audio if this path is somehow hit
+                         # This shouldn't happen if the outer 'if chime_enabled or normalize_audio:' is correct
+
+                    # Common output parameters
+                    ffmpeg_cmd_list.extend([
+                        "-ac", "1", "-ar", "24000", "-b:a", "128k",
+                        "-preset", "superfast", "-threads", "4", # Consider making threads configurable or auto-detected
+                        processed_output_path
+                    ])
+
+                    _LOGGER.debug("Executing FFmpeg command: %s", " ".join(ffmpeg_cmd_list))
+                    ffmpeg_start_time = time.monotonic()
+                    # Use partial for subprocess.run to ensure it's run in executor
+                    process = await self.hass.async_add_executor_job(
+                        partial(subprocess.run, ffmpeg_cmd_list, check=False, capture_output=True, text=True) # check=False to inspect errors
+                    )
+                    ffmpeg_duration = (time.monotonic() - ffmpeg_start_time) * 1000
+                    _LOGGER.debug("FFmpeg processing completed in %.2f ms. Return code: %d", ffmpeg_duration, process.returncode)
+
+                    if process.returncode != 0:
+                        _LOGGER.error("FFmpeg failed. Stdout: %s. Stderr: %s", process.stdout, process.stderr)
+                        # Fallback to original audio content if FFmpeg fails
+                        audio_content_to_return = audio_content
+                    else:
+                        with open(processed_output_path, "rb") as merged_file:
+                            audio_content_to_return = merged_file.read()
+                finally:
+                    # Cleanup temporary files
+                    if os.path.exists(tts_input_path):
+                        try:
+                            os.remove(tts_input_path)
+                        except Exception as e_remove:
+                            _LOGGER.warning("Could not remove temp TTS input file %s: %s", tts_input_path, e_remove)
+                    if processed_output_path and os.path.exists(processed_output_path):
+                        try:
+                            os.remove(processed_output_path)
+                        except Exception as e_remove:
+                             _LOGGER.warning("Could not remove temp FFmpeg output file %s: %s", processed_output_path, e_remove)
+
+                final_audio_content = audio_content_to_return # Use the processed audio (or original if FFmpeg failed)
+
+            else: # No chime, no normalization
+                _LOGGER.debug("Chime and normalization disabled; returning TTS MP3 audio directly.")
+                final_audio_content = audio_content
+
+            overall_duration = (time.monotonic() - overall_start) * 1000
+            _LOGGER.debug("Overall TTS processing (non-streaming) completed in %.2f ms. Returning %d bytes.", overall_duration, len(final_audio_content))
+            return "mp3", final_audio_content # Return format and bytes
+
         except MaxLengthExceeded as mle:
-            _LOGGER.exception("Maximum message length exceeded")
+            _LOGGER.error("TTS Error: %s", mle)
+            # HA expects (None, None) or (extension, None) for errors handled by TTS platform
+            return "mp3", None # Or raise if HA handles MaxLengthExceeded specifically
+        except CancelledError:
+            _LOGGER.info("TTS task was cancelled.")
+            raise # Re-raise for Home Assistant to handle
+        except subprocess.CalledProcessError as spe:
+            _LOGGER.error("FFmpeg processing failed: %s. Stderr: %s", spe, spe.stderr)
+            return "mp3", None # Fallback: return None if FFmpeg fails
         except Exception as e:
-            _LOGGER.exception("Unknown error in get_tts_audio")
-        return None, None
+            _LOGGER.exception("Unknown error during TTS generation in get_tts_audio: %s", e)
+            return "mp3", None # Generic error fallback
 
     async def async_get_tts_audio(
         self, message: str, language: str, options: dict | None = None,
-    ) -> media_source.PlayMedia | tuple[str | None, bytes | None]: # Updated return type
+    ) -> media_source.PlayMedia | tuple[str | None, bytes | None]:
+        """Proxy to the synchronous get_tts_audio method, executed in executor."""
+        # This method is called by Home Assistant and should be async.
+        # The actual audio generation, especially if it involves blocking I/O or CPU-bound tasks (like FFmpeg),
+        # should be run in an executor.
+        # However, `get_tts_audio` itself uses `hass.async_add_executor_job` for FFmpeg
+        # and its core API call to `self._engine.get_tts` is async.
+        # So, direct await should be fine.
         try:
-            # Directly await the get_tts_audio method
             return await self.get_tts_audio(message, language, options=options)
         except CancelledError:
-            _LOGGER.debug("async_get_tts_audio cancelled by client")
+            _LOGGER.debug("async_get_tts_audio cancelled by client (re-raising).")
             raise
-        except Exception:
-            _LOGGER.exception("Error in async_get_tts_audio")
-            # In case of PlayMedia, we can't return (None, None) directly if that path failed.
-            # The get_tts_audio method itself should handle its errors and return (None, None) for byte path.
-            # If PlayMedia path fails before returning PlayMedia object, it might raise, caught here.
-            # If it's an error that means we can't provide audio, returning (None,None) is fallback.
-            return None, None # Fallback for byte-based return if error occurs before PlayMedia object creation
+        except Exception as e:
+            _LOGGER.exception("Error caught in async_get_tts_audio wrapper: %s", e)
+            # Fallback if get_tts_audio itself doesn't return (None, None) or (ext, None) on error.
+            return "mp3", None
+
 
     async def async_will_remove_from_hass(self) -> None:
-        """Handle entity removal."""
-        _LOGGER.debug("Closing OpenAI TTS engine session.")
-        if self._engine:
+        """Handle entity removal from Home Assistant."""
+        _LOGGER.debug("KokoroOpenAITTSEntity is being removed. Closing engine session for entity: %s", self.entity_id)
+        if self._engine and hasattr(self._engine, 'close'): # Check if engine has close method
             await self._engine.close()
+        _LOGGER.debug("Engine session closed for %s.", self.entity_id)
