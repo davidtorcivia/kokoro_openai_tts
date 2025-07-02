@@ -15,7 +15,8 @@ The OpenAI TTS component for Home Assistant makes it possible to use the OpenAI 
 - ⭐(New!) **Support for new gpt-4o-mini-tts model** – A fast and powerful language model (note: `gpt-4o-mini-tts` might be a custom model name; official OpenAI models are typically `tts-1`, `tts-1-hd`).
 - ⭐(New!) **Text-to-Speech Instructions option** – Instruct the text-to-speech model to speak in a specific way (model support for this varies). [OpenAI new generation audio models](https://openai.com/index/introducing-our-next-generation-audio-models/)
 - **Dual Engine Support**: Choose between OpenAI's official API (or a compatible proxy) and a local [Kokoro FastAPI](https://github.com/remsky/Kokoro-FastAPI) instance.
-- **Efficient Streaming**: Internally uses streaming from the API for potentially faster and more responsive audio generation, especially for longer texts.
+- ⭐ **Streaming TTS via Media Source**: Enables direct streaming of TTS audio to compatible media players (e.g., ESPHome voice assistants) for lower latency, by leveraging Home Assistant's `media_source` feature. (Note: Chime and audio normalization are bypassed when using this streaming method).
+- ⭐ **Efficient Backend Streaming**: Internally uses streaming when fetching audio from the backend API (OpenAI or Kokoro) for potentially faster and more responsive audio generation, especially for longer texts.
 
 
 
@@ -44,6 +45,22 @@ data:
     chime: true                          # Enable or disable the chime
     chime_sound: signal2                 # Name of the file in the chime directory, without .mp3 extension
     instructions: "Speak like a pirate"  # Instructions for text-to-speach model on how to speak 
+```
+
+```yaml
+# Example for streaming to a compatible media player (e.g., ESPHome Voice Assistant)
+service: tts.speak
+target:
+  entity_id: tts.openai_nova_engine # Or your Kokoro TTS entity
+data:
+  cache: false # Cache is usually not recommended for streaming URLs
+  media_player_entity_id: media_player.voice_assistant_speaker
+  message: "This message is being streamed directly to my voice assistant!"
+  options:
+    media_source: true # Enable streaming via media_source
+    # Chime and instructions options can still be provided,
+    # but chime will be bypassed for media_source streaming.
+    # instructions: "Speak quickly"
 ```
 
 ## HACS installation ( *preferred!* )
@@ -111,6 +128,12 @@ After setting up the integration, you can adjust several options by navigating t
 *   **Instructions**: Provide specific instructions to the TTS model (if supported).
 *   **Chime Sound**: Enable/disable and select a chime sound to play before speech.
 *   **Audio Normalization**: Enable/disable loudness normalization.
+
+**Note on Streaming with `media_source`**:
+When using the `tts.speak` service, you can also include an option `media_source: true` in the `data.options` field. If set, the TTS platform will provide a streaming URL to Home Assistant, which can then be used by compatible media players for direct audio streaming. This is particularly useful for voice assistants like ESPHome.
+Important considerations when `media_source: true` is used:
+    - The **Chime** and **Audio Normalization** features are bypassed, as the audio is streamed directly from the TTS engine.
+    - `cache: false` is recommended in your service call, as caching streaming URLs is typically not desired.
 
 **Kokoro FastAPI Specific Options:**
 
