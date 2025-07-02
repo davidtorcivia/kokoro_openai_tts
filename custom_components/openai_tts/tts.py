@@ -241,8 +241,8 @@ class OpenAITTSEntity(TextToSpeechEntity):
         options = options or {}
 
         _LOGGER.debug(" -------------------------------------------")
-        _LOGGER.debug("|  OpenAI TTS                               |")
-        _LOGGER.debug("|  https://github.com/sfortis/openai_tts    |")
+        _LOGGER.debug("|  Kokoro OpenAI TTS                        |")
+        _LOGGER.debug("|  https://github.com/davidtorcivia/kokoro_openai_tts |")
         _LOGGER.debug(" -------------------------------------------")
 
         try:

@@ -1,14 +1,14 @@
 {
   "domain": "openai_tts",
-  "name": "OpenAI TTS",
+  "name": "Kokoro OpenAI TTS",
   "codeowners": [
-    "@sfortis"
+    "@davidtorcivia"
   ],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/sfortis/openai_tts/",
+  "documentation": "https://github.com/davidtorcivia/kokoro_openai_tts/",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/sfortis/openai_tts/issues",
+  "issue_tracker": "https://github.com/davidtorcivia/kokoro_openai_tts/issues",
   "requirements": [],
-  "version": "0.3.2"
+  "version": "0.3.3"
 }
