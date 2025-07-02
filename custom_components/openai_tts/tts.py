@@ -98,6 +98,7 @@ async def async_setup_entry(
         
         # Also inspect the __init__ of the variable KokoroOpenAITTSEntity directly, as before
         _LOGGER.error("DEBUG: Direct KokoroOpenAITTSEntity __init__ signature: %s", inspect.signature(KokoroOpenAITTSEntity.__init__))
+        _LOGGER.error("DEBUG: KokoroOpenAITTSEntity.this_is_a_test_method signature: %s", inspect.signature(KokoroOpenAITTSEntity.this_is_a_test_method))
 
     except Exception as e_inspect:
         _LOGGER.error("DEBUG: Error inspecting KokoroOpenAITTSEntity: %s", e_inspect)
@@ -197,6 +198,7 @@ class KokoroOpenAITTSEntity(TextToSpeechEntity):
     _attr_should_poll = False
 
     def __init__(self, hass: HomeAssistant, config: ConfigEntry, engine: OpenAITTSEngine) -> None:
+        super().__init__()
         self.hass = hass
         self._engine = engine
         self._config = config
@@ -272,6 +274,11 @@ class KokoroOpenAITTSEntity(TextToSpeechEntity):
             engine_type_display = "Kokoro FastAPI"
         model_name = self._config.data.get(CONF_MODEL, "TTS")
         return f"{engine_type_display} {model_name}"
+
+    def this_is_a_test_method(self, foo: str, bar: int) -> bool:
+        """A simple test method for signature inspection."""
+        _LOGGER.debug("this_is_a_test_method called with foo: %s, bar: %s", foo, bar)
+        return True
 
     async def get_tts_audio(
         self, message: str, language: str, options: dict | None = None
