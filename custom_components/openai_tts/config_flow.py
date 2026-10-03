@@ -17,7 +17,6 @@ from homeassistant.helpers.selector import (
     TextSelectorConfig,
     TextSelectorType,
 )
-from homeassistant.exceptions import HomeAssistantError
 
 from .const import (
     CONF_API_KEY,
@@ -115,17 +114,17 @@ class OpenAITTSConfigFlow(ConfigFlow, domain=DOMAIN):
 
     def __init__(self) -> None:
         """Initialize the config flow."""
-        self.init_data: dict[str, Any] = {}
+        self._engine_choice: dict[str, Any] = {}
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         """Handle the initial step where the user selects the TTS engine."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            self.init_data = user_input
+            self._engine_choice = user_input
             return await self.async_step_engine_specific_config()
 
         # If user_input is None, this is the first time the step is shown
-        # self.init_data is already {} from __init__ or previous failed attempt of this step
+        # self._engine_choice is already {} from __init__ or previous failed attempt of this step
         return self.async_show_form(
             step_id="user", data_schema=DATA_SCHEMA_USER, errors=errors
         )
@@ -133,7 +132,7 @@ class OpenAITTSConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_engine_specific_config(self, user_input: dict[str, Any] | None = None):
         """Handle the engine-specific configuration step."""
         errors: dict[str, str] = {}
-        current_engine = self.init_data.get(CONF_TTS_ENGINE)
+        current_engine = self._engine_choice.get(CONF_TTS_ENGINE)
 
         if not current_engine:
             _LOGGER.error("TTS Engine not found in init_data, returning to user step.")
@@ -141,7 +140,7 @@ class OpenAITTSConfigFlow(ConfigFlow, domain=DOMAIN):
             return await self.async_step_user()
 
         if user_input is not None:
-            full_data = {**self.init_data, **user_input}
+            full_data = {**self._engine_choice, **user_input}
             validation_errors = await validate_config_input(full_data)
             errors.update(validation_errors)
 
