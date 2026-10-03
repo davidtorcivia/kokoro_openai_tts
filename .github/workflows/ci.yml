@@ -1,0 +1,15 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: ghcr.io/home-assistant/home-assistant:2026.8.3
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install --root-user-action=ignore pytest ruff
+      - run: ruff check --select F,E9 custom_components
+      - run: python3 -m pytest -q -p no:cacheprovider custom_components/openai_tts/tests

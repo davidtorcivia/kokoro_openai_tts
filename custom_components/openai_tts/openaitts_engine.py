@@ -1,7 +1,6 @@
 """
 TTS Engine for OpenAI TTS.
 """
-import json
 import logging
 import aiohttp
 from asyncio import CancelledError
@@ -13,58 +12,44 @@ from .const import KOKORO_MODEL # To identify Kokoro engine for chunk_size
 _LOGGER = logging.getLogger(__name__)
 
 class OpenAITTSEngine:
-    def __init__(self, api_key: str, voice: str, model: str, speed: float, url: str, chunk_size: int | None = None):
+    def __init__(self, session: aiohttp.ClientSession, api_key: str | None, voice: str, model: str, speed: float, url: str, chunk_size: int | None = None):
+        self._session = session
         self._api_key = api_key
         self._voice = voice
         self._model = model
         self._speed = speed
         self._url = url
-        self._session = aiohttp.ClientSession()
-        self._chunk_size = chunk_size # Store chunk_size
+        self._chunk_size = chunk_size
 
-    async def get_tts(self, text: str, speed: float = None, instructions: str = None, voice: str = None):
+    async def get_tts(self, text: str, speed: float | None = None, instructions: str | None = None, voice: str | None = None):
         """Asynchronous TTS request that streams audio chunks."""
-        current_speed = speed if speed is not None else self._speed
-        current_voice = voice if voice is not None else self._voice
-        # Note: self._model is the configured model, used for engine-specific logic like chunk_size.
-        # The 'model' in the 'data' payload is what's sent to the API.
-        # For Kokoro, self._model will be KOKORO_MODEL, but data["model"] will also be KOKORO_MODEL.
-        # For OpenAI, self._model is e.g. "tts-1", and data["model"] is also "tts-1".
-
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
-        # Build unified payload - Kokoro FastAPI is OpenAI-compatible and expects 'model' field
+        # Kokoro FastAPI is OpenAI-compatible and expects the 'model' field too
         data = {
             "model": self._model,
             "input": text,
-            "voice": current_voice,
+            "voice": voice if voice is not None else self._voice,
             "response_format": "mp3",
-            "speed": current_speed
+            "speed": speed if speed is not None else self._speed,
         }
-
-        # Kokoro-specific: add chunk_size if configured
         if self._model == KOKORO_MODEL and self._chunk_size is not None:
             data["chunk_size"] = self._chunk_size
-            _LOGGER.debug("Using chunk_size %s for Kokoro request", self._chunk_size)
-
-        # Instructions support (for models that handle it)
-        if instructions is not None:
+        if instructions:
             data["instructions"] = instructions
 
-        _LOGGER.debug("Requesting TTS from URL: %s", self._url)
-        _LOGGER.debug("Request Headers: %s", headers)
-        _LOGGER.debug("Request Payload: %s", data)
+        _LOGGER.debug("Requesting TTS from %s: %s", self._url, data)
 
         try:
             async with self._session.post(
                 self._url,
                 json=data,
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(total=30) # Overall timeout for the request
+                timeout=aiohttp.ClientTimeout(total=30),
             ) as response:
-                response.raise_for_status()  # Raise an exception for bad status codes
+                response.raise_for_status()
                 async for chunk in response.content.iter_any():
                     if chunk:
                         yield chunk
@@ -72,7 +57,6 @@ class OpenAITTSEngine:
             _LOGGER.debug("TTS request cancelled")
             raise
         except aiohttp.ClientResponseError as net_err:
-            # More specific error for HTTP issues if needed, e.g. response.status
             _LOGGER.error("Network error in get_tts: %s, status: %s", net_err.message, net_err.status)
             raise HomeAssistantError(f"Network error occurred while fetching TTS audio: {net_err.message}") from net_err
         except aiohttp.ClientError as net_err:
@@ -81,11 +65,6 @@ class OpenAITTSEngine:
         except Exception as exc:
             _LOGGER.exception("Unknown error in get_tts")
             raise HomeAssistantError("An unknown error occurred while fetching TTS audio") from exc
-
-    async def close(self):
-        """Close the aiohttp session."""
-        if self._session and not self._session.closed:
-            await self._session.close()
 
     @staticmethod
     def get_supported_langs() -> list:
